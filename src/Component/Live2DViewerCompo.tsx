@@ -1,60 +1,68 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import * as PIXI from "pixi.js";
-
-// 주의: 상단에서 'pixi-live2d-display'를 import 하지 않습니다!
-// (여기서 import 하면 스크립트 로딩 전에 실행되어 에러가 납니다.)
+import { Live2DModel } from "pixi-live2d-display/cubism4";
 
 (window as any).PIXI = PIXI;
 
-export default function Live2DViewer() {
+const Live2DViewer = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [modelLoaded, setModelLoaded] = useState(false);
+  // PIXI App을 ref에 담아 관리하면 수명주기 관리가 더 안전합니다.
   const appRef = useRef<PIXI.Application | null>(null);
 
   useEffect(() => {
     if (!canvasRef.current) return;
-    if (appRef.current) return;
 
+    // 1. 마운트 상태 추적을 위한 변수
+    let isMounted = true;
+
+    // PIXI Application 생성
     const app = new PIXI.Application({
       view: canvasRef.current,
       autoStart: true,
-      backgroundAlpha: 0,
       resizeTo: window,
+      backgroundAlpha: 0,
     });
 
-    const loadLive2D = async () => {
-      // 1. 여기서 라이브러리를 '동적으로' 불러옵니다.
-      // 이렇게 하면 html의 script 태그가 다 로드된 후에 실행됩니다.
-      const { Live2DModel } = await import("pixi-live2d-display");
+    appRef.current = app; // ref에 저장
 
-      // 2. 모델 로드
+    const loadModel = async () => {
       const modelUrl = "/hiyori_free_en/runtime/hiyori_free_t08.model3.json";
 
       try {
         const model = await Live2DModel.from(modelUrl);
 
-        model.x = app.screen.width / 2;
-        model.y = app.screen.height / 2;
-        model.anchor.set(0.5, 0.5);
-        model.scale.set(0.25);
-
-        model.on("hit", (hitAreas) => {
-          if (hitAreas.includes("Body")) {
-            model.motion("TapBody");
-          }
-        });
+        // [핵심] 2. 모델 로드가 끝났을 때, 컴포넌트가 아직 살아있는지 확인합니다.
+        // 이미 언마운트 되었다면(isMounted === false) 중단합니다.
+        if (!isMounted || !app.stage) {
+          model.destroy(); // 모델은 로드됐지만 쓸데없으니 메모리 해제
+          return;
+        }
 
         app.stage.addChild(model as any);
-        setModelLoaded(true);
-        console.log("Model Loaded!");
+
+        model.x = 300;
+        model.y = 300;
+        model.scale.set(0.2);
+        model.anchor.set(0.5, 0.5);
+
+        model.on("hit", (hitAreas) => {
+          if (hitAreas.includes("body")) {
+            model.motion("tap_body");
+          }
+        });
       } catch (e) {
         console.error("모델 로드 실패:", e);
       }
     };
 
-    loadLive2D();
+    loadModel();
 
+    // Cleanup 함수
     return () => {
+      // 3. 언마운트 되면 플래그를 false로 바꿉니다.
+      isMounted = false;
+
+      // 앱이 존재할 때만 파괴합니다.
       if (appRef.current) {
         appRef.current.destroy(true, { children: true });
         appRef.current = null;
@@ -62,12 +70,7 @@ export default function Live2DViewer() {
     };
   }, []);
 
-  return (
-    <>
-      {!modelLoaded && (
-        <div style={{ position: "absolute", color: "black" }}>Loading...</div>
-      )}
-      <canvas ref={canvasRef} />
-    </>
-  );
-}
+  return <canvas ref={canvasRef} />;
+};
+
+export default Live2DViewer;
