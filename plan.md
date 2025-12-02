@@ -52,6 +52,8 @@ LLM이 뱉은 감정 태그에 맞춰 움직임을 바꿉니다.
 
 ---
 
+https://github.com/AkHiL667/react-live2d-starter
+
 https://guansss.github.io/pixi-live2d-display/
 npm install pixi-live2d-display
 npm install pixi.js
