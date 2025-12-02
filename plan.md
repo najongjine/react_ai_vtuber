@@ -1,4 +1,7 @@
 1단계: Live2D 모델 웹에 띄우기 (Rendering)
+
+"PixiJS v6 + Cubism 4"
+
 가장 먼저 할 일은 React 화면에 히요리가 숨 쉬며 서 있게 만드는 것입니다.
 
 핵심 라이브러리: pixi.js, pixi-live2d-display (이 조합이 리액트에서 가장 안정적입니다.)
@@ -10,6 +13,8 @@
 PixiJS 캔버스를 만들고 Live2DModel.from('.../hiyori_free_t08.model3.json')을 통해 모델을 로드합니다.
 
 마우스 움직임에 따라 시선이 따라오는지 확인합니다.
+
+---
 
 2단계: AI "뇌" 연결하기 (LLM Integration)
 캐릭터가 대답을 해야 합니다. 처음에는 가장 쉬운 OpenAI API를 추천합니다.
@@ -56,4 +61,4 @@ https://github.com/AkHiL667/react-live2d-starter
 
 https://guansss.github.io/pixi-live2d-display/
 npm install pixi-live2d-display
-npm install pixi.js
+npm install pixi.js@6.5.10

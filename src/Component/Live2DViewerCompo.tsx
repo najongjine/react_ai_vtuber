@@ -1,6 +1,27 @@
 import { useEffect, useRef } from "react";
 import * as PIXI from "pixi.js";
 import { Live2DModel } from "pixi-live2d-display/cubism4";
+/**
+ * 모션 그룹 목록: 
+ * 0
+: 
+"Idle"
+1
+: 
+"Flick"
+2
+: 
+"FlickDown"
+3
+: 
+"Tap"
+4
+: 
+"Tap@Body"
+5
+: 
+"Flick@Body"
+ */
 
 // window에 PIXI 노출 (필수)
 (window as any).PIXI = PIXI;
@@ -29,7 +50,7 @@ const Live2DViewer = () => {
 
     const loadModel = async () => {
       // 모델 경로
-      const modelUrl = "/hiyori_free_en/runtime/hiyori_free_t08.model3.json";
+      const modelUrl = "/mao_pro_ko/runtime/mao_pro.model3.json";
 
       try {
         const model = await Live2DModel.from(modelUrl);
@@ -38,18 +59,31 @@ const Live2DViewer = () => {
           model.destroy();
           return;
         }
+        if (model.internalModel.motionManager.expressionManager) {
+          console.log(
+            "표정 목록:",
+            model.internalModel.motionManager.expressionManager.definitions
+          );
+        } else {
+          console.log("이 모델은 표정 설정이 따로 없습니다.");
+        }
 
         app.stage.addChild(model as any);
-
-        model.x = 300;
-        model.y = 300;
-        model.scale.set(0.2);
-        model.anchor.set(0.5, 0.5);
+        model.anchor.set(0.0, 0.5);
+        model.x = window.innerWidth * 0.001;
+        model.y = window.innerHeight / 2;
+        model.scale.set(0.1);
 
         // 인터랙션 (v6에서는 이 부분 에러가 사라집니다)
         model.on("hit", (hitAreas) => {
-          if (hitAreas.includes("body")) {
-            model.motion("tap_body");
+          console.log("클릭된 부위(hitAreas):", hitAreas);
+          console.log(
+            "모션 그룹 목록:",
+            Object.keys(model.internalModel.motionManager.definitions)
+          );
+          if (hitAreas.includes("Body")) {
+            console.log("--> 'body' 부위 감지됨! tap_body 모션 실행 시도");
+            model.motion("FlickDown");
           }
         });
       } catch (e) {
