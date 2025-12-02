@@ -69,8 +69,8 @@ const Live2DViewer = () => {
         }
 
         app.stage.addChild(model as any);
-        model.anchor.set(0.0, 0.5);
-        model.x = window.innerWidth * 0.001;
+        model.anchor.set(0, 0.5);
+        model.x = window.innerWidth * 0.01;
         model.y = window.innerHeight / 2;
         model.scale.set(0.1);
 
@@ -103,7 +103,20 @@ const Live2DViewer = () => {
     };
   }, []);
 
-  return <canvas ref={canvasRef} />;
+  return (
+    <canvas
+      ref={canvasRef}
+      style={{
+        position: "fixed", // 화면 스크롤 상관없이 고정
+        top: 0,
+        left: 0,
+        width: "100vw",
+        height: "100vh",
+        zIndex: -1, // 글씨(Header) 뒤로 보내기 (필요하면 제거)
+        pointerEvents: "none", // 클릭이 캔버스 뚫고 뒤에 버튼 눌리게 하려면 추가 (선택)
+      }}
+    />
+  );
 };
 
 export default Live2DViewer;
