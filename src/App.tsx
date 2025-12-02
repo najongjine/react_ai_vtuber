@@ -6,6 +6,7 @@ import Header from "./Component/Header";
 import Footer from "./Component/Footer";
 import Maze from "./Pages/Maze";
 import MazeRL from "./Pages/MazeRL";
+import AiVtuber from "./Pages/AiVtuber";
 
 function App() {
   return (
@@ -14,6 +15,7 @@ function App() {
         <Header />
         <Routes>
           <Route path="/" element={<Home />} />
+          <Route path="/aivtuber" element={<AiVtuber />} />
           <Route path="/maze" element={<Maze />} />
           <Route path="/mazerl" element={<MazeRL />} />
         </Routes>
