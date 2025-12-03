@@ -5,12 +5,25 @@ import { Live2DModel } from "pixi-live2d-display/cubism4";
 // window에 PIXI 노출 (필수)
 (window as any).PIXI = PIXI;
 
-// [추가] v6에서는 Ticker를 명시적으로 등록해주는 것이 더 안전합니다.
+// v6에서는 Ticker를 명시적으로 등록해주는 것이 더 안전합니다.
 Live2DModel.registerTicker(PIXI.Ticker);
 
-const Live2DViewer = () => {
+interface Live2DViewerProps {
+  isSpeaking: boolean;
+}
+
+const Live2DViewer = ({ isSpeaking }: Live2DViewerProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const appRef = useRef<PIXI.Application | null>(null);
+  /** 모델 참조 저장 */
+  const modelRef = useRef<Live2DModel | null>(null);
+
+  /** isSpeaking 값을 Ticker 내부에서 실시간으로 읽기 위해 Ref 사용 */
+  const isSpeakingRef = useRef(isSpeaking);
+
+  useEffect(() => {
+    isSpeakingRef.current = isSpeaking;
+  }, [isSpeaking]);
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -53,6 +66,9 @@ const Live2DViewer = () => {
         model.y = window.innerHeight - 400;
         model.scale.set(0.1);
 
+        // 모델 참조 저장 (Ticker에서 사용)
+        modelRef.current = model;
+
         // 인터랙션 (v6에서는 이 부분 에러가 사라집니다)
         model.on("hit", (hitAreas) => {
           console.log("클릭된 부위(hitAreas):", hitAreas);
@@ -71,6 +87,23 @@ const Live2DViewer = () => {
     };
 
     loadModel();
+
+    // 립싱크 애니메이션 루프
+    app.ticker.add(() => {
+      if (modelRef.current && modelRef.current.internalModel) {
+        const coreModel = modelRef.current.internalModel.coreModel;
+
+        if (isSpeakingRef.current) {
+          // 말하고 있을 때: 사인파(Sine wave)를 이용해 입을 자연스럽게 뻐끔거림
+          // 속도(15)와 크기(0.8)는 취향껏 조절
+          const value = Math.abs(Math.sin(Date.now() / 100)) * 0.8;
+          coreModel.setParameterValueById("ParamMouthOpenY", value);
+        } else {
+          // 말하지 않을 때: 입을 다뭄 (부드럽게 0으로 수렴하게 하거나 강제 0 설정)
+          coreModel.setParameterValueById("ParamMouthOpenY", 0);
+        }
+      }
+    });
 
     return () => {
       isMounted = false;

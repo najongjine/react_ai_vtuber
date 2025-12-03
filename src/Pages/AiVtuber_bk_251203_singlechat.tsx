@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import Live2DViewerCompo from "../Component/Live2DViewerCompo"; // 경로 확인 필요
-import { GoogleGenerativeAI, ChatSession } from "@google/generative-ai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 // API 키 설정 (실제 배포 시에는 .env 파일 사용 권장: import.meta.env.VITE_GEMINI_API_KEY)
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
@@ -13,15 +13,11 @@ const AiVtuber: React.FC = () => {
   // [추가] AI 응답 관련 상태
   const [aiResponse, setAiResponse] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
-  const chatSessionRef = useRef<ChatSession | null>(null);
 
   // [기존] 화면 공유 스트림 상태
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const screenVideoRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  /** 말하고 있는지 여부 확인하는 State */
-  const [isSpeaking, setIsSpeaking] = useState(false);
 
   // ... (화면 공유 관련 코드는 기존과 동일하므로 생략하지 않고 그대로 유지) ...
   const handleStartScreenShare = async () => {
@@ -52,15 +48,6 @@ const AiVtuber: React.FC = () => {
     }
   }, [screenStream]);
 
-  /** 브라우저 목소리 로드 (Chrome 등에서 필요) */
-  useEffect(() => {
-    const loadVoices = () => {
-      window.speechSynthesis.getVoices();
-    };
-    loadVoices();
-    window.speechSynthesis.onvoiceschanged = loadVoices;
-  }, []);
-
   // [추가] 파일을 Gemini가 이해할 수 있는 포맷(Base64)으로 변환하는 헬퍼 함수
   const fileToGenerativePart = async (file: File) => {
     const base64EncodedDataPromise = new Promise<string>((resolve) => {
@@ -76,56 +63,7 @@ const AiVtuber: React.FC = () => {
     };
   };
 
-  /** 대화 초기화(Reset) 핸들러 */
-  const handleResetChat = () => {
-    if (isStreaming) return; // 대화 생성 중에는 초기화 방지
-
-    // 1. 세션 참조를 null로 만들어서 다음 전송 때 startChat이 새로 호출되게 함
-    chatSessionRef.current = null;
-
-    // 2. UI 상태 초기화
-    setAiResponse(""); // 말풍선 닫기
-    setInputText("");
-    setSelectedImages([]);
-
-    // (선택 사항) 사용자에게 초기화됨을 알리고 싶다면 아래 주석 해제
-    // alert("대화가 초기화되었습니다. 새로운 주제로 대화해보세요!");
-  };
-
-  /** TTS 함수 */
-  const speak = (text: string) => {
-    if (typeof window !== "undefined" && window.speechSynthesis) {
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = "ko-KR";
-      utterance.rate = 1.0;
-      utterance.pitch = 1.0;
-
-      const voices = window.speechSynthesis.getVoices();
-      const korVoice = voices.find(
-        (v) => v.lang === "ko-KR" && v.name.includes("Google")
-      );
-      if (korVoice) utterance.voice = korVoice;
-
-      // [추가] 말하기 시작할 때 입 움직임 켜기
-      utterance.onstart = () => {
-        setIsSpeaking(true);
-      };
-
-      // [추가] 말하기 끝나면 입 움직임 끄기
-      utterance.onend = () => {
-        setIsSpeaking(false);
-      };
-
-      // [추가] 에러 발생 등으로 중단되어도 입 닫기
-      utterance.onerror = () => {
-        setIsSpeaking(false);
-      };
-
-      window.speechSynthesis.speak(utterance);
-    }
-  };
-
-  /** 메시지 전송 및 스트리밍 핸들러 */
+  // [수정] 메시지 전송 및 스트리밍 핸들러
   const handleSendMessage = async () => {
     if ((!inputText.trim() && selectedImages.length === 0) || isStreaming)
       return;
@@ -146,15 +84,6 @@ const AiVtuber: React.FC = () => {
       // 2. 모델 준비 (gemini-1.5-flash 가 속도와 가성비가 좋음)
       const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
-      // 채팅 세션이 없으면 새로 시작 (최초 1회 실행)
-      if (!chatSessionRef.current) {
-        chatSessionRef.current = model.startChat({
-          // 필요하면 여기에 시스템 프롬프트 역할을 하는 초기 대화를 넣을 수 있습니다.
-          // 예: role: "user", parts: [{ text: "너는 친절한 AI 버튜버야." }]
-          history: [],
-        });
-      }
-
       // 3. 이미지 데이터 변환
       const imageParts = await Promise.all(
         imagesToSend.map((file) => fileToGenerativePart(file))
@@ -162,40 +91,17 @@ const AiVtuber: React.FC = () => {
 
       // 4. 스트리밍 요청 (텍스트 + 이미지)
       // 화면 공유 중이라면 스크린샷 로직도 여기에 추가 가능
-      const result = await chatSessionRef.current.sendMessageStream([
-        prompt,
-        ...imageParts,
-      ]);
-
-      let accumulatedText = ""; // 전체 텍스트 누적
-      let currentSentence = ""; // 현재 읽을 문장 버퍼
+      const result = await model.generateContentStream([prompt, ...imageParts]);
 
       // 5. 스트림 청크(조각) 처리
       for await (const chunk of result.stream) {
         const chunkText = chunk.text();
-
-        // 화면 표시용 누적
+        // 기존 텍스트에 이어 붙여서 타자기 효과처럼 보이게 함
         setAiResponse((prev) => prev + chunkText);
-
-        // TTS용 문장 단위 처리
-        currentSentence += chunkText;
-
-        // 문장 끝 기호가 나오면 읽기 (. ! ? \n)
-        if (/[.!?\n]/.test(chunkText)) {
-          speak(currentSentence);
-          currentSentence = ""; // 읽었으니 비움
-        }
       }
-
-      // 혹시 남은 문장이 있다면 마저 읽기
-      if (currentSentence.trim()) {
-        speak(currentSentence);
-      }
-    } catch (error: any) {
+    } catch (error) {
       console.error("Gemini API Error:", error);
-      setAiResponse("에러가 발생했습니다. (채팅 세션 초기화)");
-      // 에러 나면 세션을 초기화해주는 것이 좋습니다.
-      chatSessionRef.current = null;
+      setAiResponse("에러가 발생했습니다. 다시 시도해주세요.");
     } finally {
       setIsStreaming(false);
     }
@@ -252,29 +158,6 @@ const AiVtuber: React.FC = () => {
         >
           AI Vtuber
         </h1>
-
-        {/* [추가] 대화 초기화 버튼 */}
-        <button
-          onClick={handleResetChat}
-          disabled={isStreaming}
-          style={{
-            padding: "8px 16px",
-            fontSize: "14px",
-            borderRadius: "8px",
-            border: "none",
-            background: isStreaming ? "#aaa" : "#50E3C2", // 민트색 계열로 구분
-            color: "white",
-            cursor: isStreaming ? "not-allowed" : "pointer",
-            boxShadow: "0 2px 5px rgba(0,0,0,0.2)",
-            display: "flex",
-            alignItems: "center",
-            gap: "5px",
-          }}
-          title="대화 내용을 모두 지우고 새로 시작합니다"
-        >
-          🔄 대화 초기화
-        </button>
-
         {!screenStream ? (
           <button
             onClick={handleStartScreenShare}
@@ -310,7 +193,7 @@ const AiVtuber: React.FC = () => {
         )}
       </div>
 
-      <Live2DViewerCompo isSpeaking={isSpeaking} />
+      <Live2DViewerCompo />
 
       {/* 화면 공유 영역 (기존 코드) */}
       {screenStream && (
