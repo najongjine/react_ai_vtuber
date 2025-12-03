@@ -1,27 +1,6 @@
 import { useEffect, useRef } from "react";
 import * as PIXI from "pixi.js";
 import { Live2DModel } from "pixi-live2d-display/cubism4";
-/**
- * 모션 그룹 목록: 
- * 0
-: 
-"Idle"
-1
-: 
-"Flick"
-2
-: 
-"FlickDown"
-3
-: 
-"Tap"
-4
-: 
-"Tap@Body"
-5
-: 
-"Flick@Body"
- */
 
 // window에 PIXI 노출 (필수)
 (window as any).PIXI = PIXI;
@@ -71,7 +50,7 @@ const Live2DViewer = () => {
         app.stage.addChild(model as any);
         model.anchor.set(0, 0.5);
         model.x = window.innerWidth * 0.01;
-        model.y = window.innerHeight / 2;
+        model.y = window.innerHeight - 400;
         model.scale.set(0.1);
 
         // 인터랙션 (v6에서는 이 부분 에러가 사라집니다)
