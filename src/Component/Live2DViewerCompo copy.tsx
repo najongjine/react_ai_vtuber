@@ -2,10 +2,7 @@ import { useEffect, useRef } from "react";
 import * as PIXI from "pixi.js";
 import { Live2DModel } from "pixi-live2d-display/cubism4";
 
-// window에 PIXI 노출 (필수)
 (window as any).PIXI = PIXI;
-
-// v6에서는 Ticker를 명시적으로 등록해주는 것이 더 안전합니다.
 Live2DModel.registerTicker(PIXI.Ticker);
 
 interface Live2DViewerProps {
@@ -15,103 +12,81 @@ interface Live2DViewerProps {
 const Live2DViewer = ({ isSpeaking }: Live2DViewerProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const appRef = useRef<PIXI.Application | null>(null);
-  /** 모델 참조 저장 */
-  const modelRef = useRef<Live2DModel | null>(null);
-
-  /** isSpeaking 값을 Ticker 내부에서 실시간으로 읽기 위해 Ref 사용 */
-  const isSpeakingRef = useRef(isSpeaking);
-
-  useEffect(() => {
-    isSpeakingRef.current = isSpeaking;
-  }, [isSpeaking]);
+  const modelRef = useRef<Live2DModel | null>(null); // 모델 참조용
+  const mouthOpenParamIndexRef = useRef<number>(-1);
 
   useEffect(() => {
     if (!canvasRef.current) return;
 
-    let isMounted = true;
-
-    // PIXI Application 생성 (v6 방식)
     const app = new PIXI.Application({
       view: canvasRef.current,
       autoStart: true,
       resizeTo: window,
-      transparent: true, // [변경] v7의 backgroundAlpha: 0 대신 v6는 transparent: true를 씁니다.
+      transparent: true,
     });
-
     appRef.current = app;
 
     const loadModel = async () => {
-      // 모델 경로
       const modelUrl = "/mao_pro_ko/runtime/mao_pro.model3.json";
 
       try {
         const model = await Live2DModel.from(modelUrl);
 
-        if (!isMounted || !app.stage) {
+        if (!app.stage) {
           model.destroy();
           return;
         }
-        if (model.internalModel.motionManager.expressionManager) {
-          console.log(
-            "표정 목록:",
-            model.internalModel.motionManager.expressionManager.definitions
-          );
-        } else {
-          console.log("이 모델은 표정 설정이 따로 없습니다.");
-        }
 
+        // 1. 화면에 배치
         app.stage.addChild(model as any);
-        model.anchor.set(0, 0.5);
-        model.x = window.innerWidth * 0.01;
-        model.y = window.innerHeight - 400;
+        model.anchor.set(0.5, 0.5);
+        model.x = window.innerWidth / 2;
+        model.y = window.innerHeight / 2 + 100;
         model.scale.set(0.1);
+        model.interactive = false; // 마우스 반응 차단
 
-        // 모델 참조 저장 (Ticker에서 사용)
         modelRef.current = model;
 
-        // 인터랙션 (v6에서는 이 부분 에러가 사라집니다)
-        model.on("hit", (hitAreas) => {
-          console.log("클릭된 부위(hitAreas):", hitAreas);
-          console.log(
-            "모션 그룹 목록:",
-            Object.keys(model.internalModel.motionManager.definitions)
-          );
-          if (hitAreas.includes("Body")) {
-            console.log("--> 'body' 부위 감지됨! tap_body 모션 실행 시도");
-            model.motion("FlickDown");
-          }
-        });
+        // [핵심 1] 모션 매니저 완전 거세 (붓질의 원흉)
+        const internalModel = model.internalModel as any;
+        if (internalModel.motionManager) {
+          // 모션 업데이트 함수를 빈 껍데기로 바꿔치기 -> 동작 계산 자체를 못하게 만듦
+          internalModel.motionManager.update = () => {};
+        }
+
+        // [핵심 2] ParamA 인덱스 찾기
+        const coreModel = internalModel.coreModel as any;
+        const index = coreModel._parameterIds.indexOf("ParamA");
+        mouthOpenParamIndexRef.current = index;
+
+        console.log("ParamA Index:", index); // -1이면 안됨
       } catch (e) {
-        console.error("모델 로드 실패:", e);
+        console.error("Load Error:", e);
       }
     };
 
     loadModel();
 
-    // 립싱크 애니메이션 루프
+    // [핵심 3] 무조건 작동하는 Ticker 사용 (model.on 안씀)
     app.ticker.add(() => {
-      if (modelRef.current && modelRef.current.internalModel) {
-        const coreModel = modelRef.current.internalModel.coreModel;
+      if (!modelRef.current) return;
 
-        if (isSpeakingRef.current) {
-          // 말하고 있을 때: 사인파(Sine wave)를 이용해 입을 자연스럽게 뻐끔거림
-          // 속도(15)와 크기(0.8)는 취향껏 조절
-          const value = Math.abs(Math.sin(Date.now() / 100)) * 0.8;
-          coreModel.setParameterValueById("ParamMouthOpenY", value);
-        } else {
-          // 말하지 않을 때: 입을 다뭄 (부드럽게 0으로 수렴하게 하거나 강제 0 설정)
-          coreModel.setParameterValueById("ParamMouthOpenY", 0);
-        }
-      }
+      const internalModel = modelRef.current.internalModel as any;
+      const coreModel = internalModel?.coreModel as any;
+      const mouthIndex = mouthOpenParamIndexRef.current;
+
+      if (!coreModel || mouthIndex === -1) return;
+
+      // [강제 주입]
+      // 모션 매니저를 죽였으므로(update = null), 이제 이 값이 덮어씌워지지 않고 유지됨
+      // 0.2 ~ 1.0 무한 반복
+      const value = Math.abs(Math.sin(Date.now() / 40)) * 0.8 + 0.2;
+
+      coreModel.setParameterValueByIndex(mouthIndex, value);
     });
 
     return () => {
-      isMounted = false;
-      if (appRef.current) {
-        // [변경] v6 스타일의 destroy 옵션
-        appRef.current.destroy(true, { children: true });
-        appRef.current = null;
-      }
+      appRef.current?.destroy(true, { children: true });
     };
   }, []);
 
@@ -119,13 +94,13 @@ const Live2DViewer = ({ isSpeaking }: Live2DViewerProps) => {
     <canvas
       ref={canvasRef}
       style={{
-        position: "fixed", // 화면 스크롤 상관없이 고정
+        position: "fixed",
         top: 0,
         left: 0,
         width: "100vw",
         height: "100vh",
-        zIndex: -1, // 글씨(Header) 뒤로 보내기 (필요하면 제거)
-        pointerEvents: "none", // 클릭이 캔버스 뚫고 뒤에 버튼 눌리게 하려면 추가 (선택)
+        zIndex: -1,
+        pointerEvents: "none",
       }}
     />
   );
