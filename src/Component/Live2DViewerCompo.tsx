@@ -3,7 +3,6 @@ import * as PIXI from "pixi.js";
 import { Live2DModel } from "pixi-live2d-display/cubism4";
 
 (window as any).PIXI = PIXI;
-
 Live2DModel.registerTicker(PIXI.Ticker);
 
 interface Live2DViewerProps {
@@ -13,15 +12,8 @@ interface Live2DViewerProps {
 const Live2DViewer = ({ isSpeaking }: Live2DViewerProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const appRef = useRef<PIXI.Application | null>(null);
-  const modelRef = useRef<Live2DModel | null>(null);
-  const isSpeakingRef = useRef(isSpeaking);
-
-  // 입 벌리기 파라미터 인덱스
+  const modelRef = useRef<Live2DModel | null>(null); // 모델 참조용
   const mouthOpenParamIndexRef = useRef<number>(-1);
-
-  useEffect(() => {
-    isSpeakingRef.current = isSpeaking;
-  }, [isSpeaking]);
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -32,7 +24,6 @@ const Live2DViewer = ({ isSpeaking }: Live2DViewerProps) => {
       resizeTo: window,
       transparent: true,
     });
-
     appRef.current = app;
 
     const loadModel = async () => {
@@ -46,60 +37,37 @@ const Live2DViewer = ({ isSpeaking }: Live2DViewerProps) => {
           return;
         }
 
-        // ─────────────────────────────────────────────────────────────
-        // [핵심 1] 마우스/터치 상호작용 완전 차단
-        // ─────────────────────────────────────────────────────────────
-        // 붓그리기/뒷짐포즈는 보통 마우스 클릭이나 터치에 반응하는 모션입니다.
-        // 이걸 끄면 사용자가 건드려도 반응하지 않습니다.
-        model.interactive = false;
-
+        // 1. 화면에 배치
         app.stage.addChild(model as any);
         model.anchor.set(0.5, 0.5);
         model.x = window.innerWidth / 2;
-        model.y = window.innerHeight / 2 + 150;
+        model.y = window.innerHeight / 2 + 100;
         model.scale.set(0.1);
+        model.interactive = false; // 마우스 반응 차단
 
         modelRef.current = model;
 
+        // [핵심 1] 모션 매니저 완전 거세 (붓질의 원흉)
         const internalModel = model.internalModel as any;
-        const coreModel = internalModel.coreModel as any;
-
-        // ─────────────────────────────────────────────────────────────
-        // [핵심 2] 모델의 '자아' 없애기 (모든 모션 그룹 삭제)
-        // ─────────────────────────────────────────────────────────────
         if (internalModel.motionManager) {
-          // 1. 립싱크 끄기
-          internalModel.motionManager.lipSync = false;
-
-          // 2. 정의된 모든 모션 그룹(Idle, Tap, Special 등)을 싹 다 비움
-          const definitions = internalModel.motionManager.definitions;
-          if (definitions) {
-            Object.keys(definitions).forEach((groupName) => {
-              // 모든 그룹을 빈 배열로 만들어 실행 차단
-              internalModel.motionManager.groups[groupName] = [];
-            });
-          }
-
-          // 3. 강제 정지 (stop 함수가 존재할 경우에만)
-          if (typeof internalModel.motionManager.stop === "function") {
-            internalModel.motionManager.stop();
-          }
+          // 모션 업데이트 함수를 빈 껍데기로 바꿔치기 -> 동작 계산 자체를 못하게 만듦
+          internalModel.motionManager.update = () => {};
         }
 
-        // ─────────────────────────────────────────────────────────────
-        // [핵심 3] 파라미터 연결
-        // ─────────────────────────────────────────────────────────────
-        const parameterIds = coreModel._parameterIds || [];
-        const targetId = "ParamA";
-        const index = parameterIds.indexOf(targetId);
+        // [핵심 2] ParamA 인덱스 찾기
+        const coreModel = internalModel.coreModel as any;
+        const index = coreModel._parameterIds.indexOf("ParamA");
         mouthOpenParamIndexRef.current = index;
+
+        console.log("ParamA Index:", index); // -1이면 안됨
       } catch (e) {
-        console.error("모델 로드 실패:", e);
+        console.error("Load Error:", e);
       }
     };
 
     loadModel();
 
+    // [핵심 3] 무조건 작동하는 Ticker 사용 (model.on 안씀)
     app.ticker.add(() => {
       if (!modelRef.current) return;
 
@@ -109,24 +77,16 @@ const Live2DViewer = ({ isSpeaking }: Live2DViewerProps) => {
 
       if (!coreModel || mouthIndex === -1) return;
 
-      // [기존 문제] 0까지 내려가서 입을 꾹 다무는 구간이 있었음
-      // const value = (Math.sin(Date.now() / 60) + 1) * 0.5;
-
-      // [해결 공식]
-      // 1. Math.abs : 둥근 물결 대신 뾰족하게 튀어오름 (더 다급해 보임)
-      // 2. / 40 : 속도 더 빠르게
-      // 3. * 0.8 + 0.2 : 입을 최소 0.2(20%)는 벌린 상태 유지 -> 절대 안 닫음
+      // [강제 주입]
+      // 모션 매니저를 죽였으므로(update = null), 이제 이 값이 덮어씌워지지 않고 유지됨
+      // 0.2 ~ 1.0 무한 반복
       const value = Math.abs(Math.sin(Date.now() / 40)) * 0.8 + 0.2;
 
-      // 파라미터 값 강제 주입
       coreModel.setParameterValueByIndex(mouthIndex, value);
     });
 
     return () => {
-      if (appRef.current) {
-        appRef.current.destroy(true, { children: true });
-        appRef.current = null;
-      }
+      appRef.current?.destroy(true, { children: true });
     };
   }, []);
 
