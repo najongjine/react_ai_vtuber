@@ -16,7 +16,7 @@ const Live2DViewer = ({ isSpeaking }: Live2DViewerProps) => {
   const modelRef = useRef<Live2DModel | null>(null);
   const isSpeakingRef = useRef(isSpeaking);
 
-  // [수정] 입 벌리기 파라미터 인덱스
+  // 입 벌리기 파라미터 인덱스
   const mouthOpenParamIndexRef = useRef<number>(-1);
 
   useEffect(() => {
@@ -36,7 +36,6 @@ const Live2DViewer = ({ isSpeaking }: Live2DViewerProps) => {
     appRef.current = app;
 
     const loadModel = async () => {
-      // 모델 경로 확인 (본인 경로에 맞게 수정)
       const modelUrl = "/mao_pro_ko/runtime/mao_pro.model3.json";
 
       try {
@@ -46,6 +45,13 @@ const Live2DViewer = ({ isSpeaking }: Live2DViewerProps) => {
           model.destroy();
           return;
         }
+
+        // ─────────────────────────────────────────────────────────────
+        // [핵심 1] 마우스/터치 상호작용 완전 차단
+        // ─────────────────────────────────────────────────────────────
+        // 붓그리기/뒷짐포즈는 보통 마우스 클릭이나 터치에 반응하는 모션입니다.
+        // 이걸 끄면 사용자가 건드려도 반응하지 않습니다.
+        model.interactive = false;
 
         app.stage.addChild(model as any);
         model.anchor.set(0.5, 0.5);
@@ -59,30 +65,34 @@ const Live2DViewer = ({ isSpeaking }: Live2DViewerProps) => {
         const coreModel = internalModel.coreModel as any;
 
         // ─────────────────────────────────────────────────────────────
-        // [핵심 1] 자동 제어 끄기 (충돌 방지)
+        // [핵심 2] 모델의 '자아' 없애기 (모든 모션 그룹 삭제)
         // ─────────────────────────────────────────────────────────────
         if (internalModel.motionManager) {
-          internalModel.motionManager.lipSync = false; // 자동 립싱크 끄기
+          // 1. 립싱크 끄기
+          internalModel.motionManager.lipSync = false;
+
+          // 2. 정의된 모든 모션 그룹(Idle, Tap, Special 등)을 싹 다 비움
+          const definitions = internalModel.motionManager.definitions;
+          if (definitions) {
+            Object.keys(definitions).forEach((groupName) => {
+              // 모든 그룹을 빈 배열로 만들어 실행 차단
+              internalModel.motionManager.groups[groupName] = [];
+            });
+          }
+
+          // 3. 강제 정지 (stop 함수가 존재할 경우에만)
+          if (typeof internalModel.motionManager.stop === "function") {
+            internalModel.motionManager.stop();
+          }
         }
 
         // ─────────────────────────────────────────────────────────────
-        // [핵심 2] 파라미터 찾기 (ParamA를 강제로 찾음)
+        // [핵심 3] 파라미터 연결
         // ─────────────────────────────────────────────────────────────
         const parameterIds = coreModel._parameterIds || [];
-
-        // 보내주신 목록에 'ParamA'가 확실히 존재하므로, 그걸 찾습니다.
         const targetId = "ParamA";
         const index = parameterIds.indexOf(targetId);
-
         mouthOpenParamIndexRef.current = index;
-
-        if (index !== -1) {
-          console.log(`✅ 입 파라미터 확정: ${targetId} (Index: ${index})`);
-        } else {
-          console.error(
-            `❌ ParamA를 찾을 수 없습니다. 모델 파일을 확인하세요.`
-          );
-        }
       } catch (e) {
         console.error("모델 로드 실패:", e);
       }
@@ -90,9 +100,6 @@ const Live2DViewer = ({ isSpeaking }: Live2DViewerProps) => {
 
     loadModel();
 
-    // ─────────────────────────────────────────────────────────────
-    // [핵심 3] 말할 때 'ParamA' 값을 흔들어줌
-    // ─────────────────────────────────────────────────────────────
     app.ticker.add(() => {
       if (!modelRef.current) return;
 
@@ -102,15 +109,17 @@ const Live2DViewer = ({ isSpeaking }: Live2DViewerProps) => {
 
       if (!coreModel || mouthIndex === -1) return;
 
-      // [수정 포인트] isSpeaking 조건 없이 무조건 움직임 값을 넣습니다.
-      // 0.0 ~ 1.0 사이를 반복 (ParamA가 맞다면 입이 계속 벌어졌다 닫혔다 해야 함)
-      const value = Math.abs(Math.sin(Date.now() / 100)) * 1.0;
+      // [기존 문제] 0까지 내려가서 입을 꾹 다무는 구간이 있었음
+      // const value = (Math.sin(Date.now() / 60) + 1) * 0.5;
 
-      // 파라미터 값 주입
+      // [해결 공식]
+      // 1. Math.abs : 둥근 물결 대신 뾰족하게 튀어오름 (더 다급해 보임)
+      // 2. / 40 : 속도 더 빠르게
+      // 3. * 0.8 + 0.2 : 입을 최소 0.2(20%)는 벌린 상태 유지 -> 절대 안 닫음
+      const value = Math.abs(Math.sin(Date.now() / 40)) * 0.8 + 0.2;
+
+      // 파라미터 값 강제 주입
       coreModel.setParameterValueByIndex(mouthIndex, value);
-
-      // 혹시 몰라 update 호출 (보통 자동이지만 확실하게 하기 위해)
-      // coreModel.update(); // 필요 시 주석 해제
     });
 
     return () => {
