@@ -66,9 +66,9 @@ const Live2DViewer = forwardRef<Live2DController, Live2DViewerProps>(
           }
 
           app.stage.addChild(model as any);
-          model.anchor.set(0.5, 0.5);
-          model.x = window.innerWidth / 2;
-          model.y = window.innerHeight / 2 + 100;
+          model.anchor.set(0.0, 0.5);
+          model.x = window.innerWidth * 0.01;
+          model.y = window.innerHeight / 2 - 10;
           model.scale.set(0.1);
           model.interactive = true;
 
