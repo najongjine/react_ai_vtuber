@@ -1,57 +1,26 @@
 import React, { useState, useRef, useEffect } from "react";
 import Live2DViewerCompo from "../Component/Live2DViewerCompo";
-// [추가됨] Live2D 제어용 타입과 모션 상수 import (경로를 실제 파일 위치에 맞게 수정하세요)
 import { MAO_MOTIONS, Live2DController } from "../Component/Live2DMaoConstants";
 import { GoogleGenerativeAI, ChatSession } from "@google/generative-ai";
 
+// 환경변수에서 API 키 가져오기
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(API_KEY);
 
 const AiVtuber: React.FC = () => {
+  // --- 상태 관리 (채팅, 이미지, 응답, 스트리밍, 말하기) ---
   const [inputText, setInputText] = useState("");
   const [selectedImages, setSelectedImages] = useState<File[]>([]);
-
   const [aiResponse, setAiResponse] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
-  const chatSessionRef = useRef<ChatSession | null>(null);
-
-  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
-  const screenVideoRef = useRef<HTMLVideoElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
   const [isSpeaking, setIsSpeaking] = useState(false);
 
-  // [추가됨] Live2D 뷰어를 제어하기 위한 Ref 생성
+  // --- Refs ---
+  const chatSessionRef = useRef<ChatSession | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const live2dRef = useRef<Live2DController>(null);
 
-  const handleStartScreenShare = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: true,
-      });
-      setScreenStream(stream);
-      stream.getTracks().forEach((track) => {
-        track.onended = () => setScreenStream(null);
-      });
-    } catch (err) {
-      console.error("화면 공유 실패:", err);
-    }
-  };
-
-  const handleStopScreenShare = () => {
-    if (screenStream) {
-      screenStream.getTracks().forEach((track) => track.stop());
-      setScreenStream(null);
-    }
-  };
-
-  useEffect(() => {
-    if (screenVideoRef.current && screenStream) {
-      screenVideoRef.current.srcObject = screenStream;
-    }
-  }, [screenStream]);
-
+  // --- 음성 목록 로드 (크롬 등 브라우저 호환성) ---
   useEffect(() => {
     const loadVoices = () => {
       window.speechSynthesis.getVoices();
@@ -60,6 +29,7 @@ const AiVtuber: React.FC = () => {
     window.speechSynthesis.onvoiceschanged = loadVoices;
   }, []);
 
+  // --- 헬퍼 함수: 이미지 파일을 Gemini용 포맷으로 변환 ---
   const fileToGenerativePart = async (file: File) => {
     const base64EncodedDataPromise = new Promise<string>((resolve) => {
       const reader = new FileReader();
@@ -74,6 +44,7 @@ const AiVtuber: React.FC = () => {
     };
   };
 
+  // --- 채팅 초기화 ---
   const handleResetChat = () => {
     if (isStreaming) return;
     chatSessionRef.current = null;
@@ -82,13 +53,14 @@ const AiVtuber: React.FC = () => {
     setSelectedImages([]);
   };
 
-  // [추가됨] 모션 재생 헬퍼 함수 (편리한 사용을 위해)
+  // --- Live2D 모션 재생 함수 ---
   const triggerMotion = (motionKey: keyof typeof MAO_MOTIONS) => {
     if (live2dRef.current) {
       live2dRef.current.playMotion(motionKey);
     }
   };
 
+  // --- TTS (말하기) 함수 ---
   const speak = (text: string) => {
     if (typeof window !== "undefined" && window.speechSynthesis) {
       const utterance = new SpeechSynthesisUtterance(text);
@@ -104,8 +76,6 @@ const AiVtuber: React.FC = () => {
 
       utterance.onstart = () => {
         setIsSpeaking(true);
-        // [예시] 말하기 시작할 때 특정 제스처를 취하게 할 수 있음
-        // triggerMotion("TAP_BODY_2");
       };
 
       utterance.onend = () => {
@@ -120,6 +90,7 @@ const AiVtuber: React.FC = () => {
     }
   };
 
+  // --- 메시지 전송 및 Gemini 호출 ---
   const handleSendMessage = async () => {
     if ((!inputText.trim() && selectedImages.length === 0) || isStreaming)
       return;
@@ -133,11 +104,11 @@ const AiVtuber: React.FC = () => {
     setInputText("");
     setSelectedImages([]);
 
-    // [예시] 질문을 보낼 때 '고민하는' 모션이나 '일반' 모션 재생
+    // 질문 보낼 때 모션 (고민하는 듯한 제스처 등)
     triggerMotion("TAP_BODY_1");
 
     try {
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
       if (!chatSessionRef.current) {
         chatSessionRef.current = model.startChat({
@@ -161,6 +132,7 @@ const AiVtuber: React.FC = () => {
         setAiResponse((prev) => prev + chunkText);
         currentSentence += chunkText;
 
+        // 문장 단위로 끊어서 읽기 (. ! ? 줄바꿈)
         if (/[.!?\n]/.test(chunkText)) {
           speak(currentSentence);
           currentSentence = "";
@@ -170,9 +142,6 @@ const AiVtuber: React.FC = () => {
       if (currentSentence.trim()) {
         speak(currentSentence);
       }
-
-      // [예시] 답변이 끝나면 스페셜 모션 (기분 좋음 등)
-      // triggerMotion("SPECIAL_HEART");
     } catch (error: any) {
       console.error("Gemini API Error:", error);
       setAiResponse("에러가 발생했습니다. (채팅 세션 초기화)");
@@ -182,6 +151,30 @@ const AiVtuber: React.FC = () => {
     }
   };
 
+  /**  --- 붙여넣기(Ctrl+V) 처리: 스크린샷 이미지 감지 --- */
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData.items;
+    const imageFiles: File[] = [];
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      // 붙여넣은 데이터가 이미지인 경우
+      if (item.type.indexOf("image") !== -1) {
+        const file = item.getAsFile();
+        if (file) {
+          imageFiles.push(file);
+        }
+      }
+    }
+
+    // 이미지가 발견되면 상태에 추가하고, 텍스트가 섞여 들어가는 것 방지(선택사항)
+    if (imageFiles.length > 0) {
+      e.preventDefault(); // 이미지를 붙여넣었을 때 불필요한 텍스트 입력 방지
+      setSelectedImages((prev) => [...prev, ...imageFiles]);
+    }
+  };
+
+  // --- 엔터키 입력 처리 ---
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return;
     if (e.key === "Enter" && !e.shiftKey) {
@@ -190,6 +183,7 @@ const AiVtuber: React.FC = () => {
     }
   };
 
+  // --- 파일 선택 처리 ---
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       const filesArray = Array.from(e.target.files);
@@ -197,6 +191,7 @@ const AiVtuber: React.FC = () => {
     }
   };
 
+  // --- 선택된 이미지 삭제 ---
   const removeImage = (indexToRemove: number) => {
     setSelectedImages((prev) =>
       prev.filter((_, index) => index !== indexToRemove)
@@ -212,6 +207,7 @@ const AiVtuber: React.FC = () => {
         overflow: "hidden",
       }}
     >
+      {/* --- 상단 헤더 (제목 & 초기화 버튼) --- */}
       <div
         style={{
           position: "absolute",
@@ -252,46 +248,12 @@ const AiVtuber: React.FC = () => {
         >
           🔄 대화 초기화
         </button>
-
-        {!screenStream ? (
-          <button
-            onClick={handleStartScreenShare}
-            style={{
-              padding: "8px 16px",
-              fontSize: "14px",
-              borderRadius: "8px",
-              border: "none",
-              background: "#4A90E2",
-              color: "white",
-              cursor: "pointer",
-              boxShadow: "0 2px 5px rgba(0,0,0,0.2)",
-            }}
-          >
-            🖥️ 화면 공유 시작
-          </button>
-        ) : (
-          <button
-            onClick={handleStopScreenShare}
-            style={{
-              padding: "8px 16px",
-              fontSize: "14px",
-              borderRadius: "8px",
-              border: "none",
-              background: "#ff5555",
-              color: "white",
-              cursor: "pointer",
-              boxShadow: "0 2px 5px rgba(0,0,0,0.2)",
-            }}
-          >
-            ⏹️ 공유 중지
-          </button>
-        )}
       </div>
 
-      {/* [수정됨] Ref 연결 */}
+      {/* --- Live2D 뷰어 컴포넌트 --- */}
       <Live2DViewerCompo ref={live2dRef} isSpeaking={isSpeaking} />
 
-      {/* [추가됨] 모션 테스트 버튼들 (우측 상단) */}
+      {/* --- 모션 테스트 버튼들 (우측 상단) --- */}
       <div
         style={{
           position: "absolute",
@@ -312,46 +274,7 @@ const AiVtuber: React.FC = () => {
         <button onClick={() => triggerMotion("TAP_BODY_3")}>👋 인사</button>
       </div>
 
-      {screenStream && (
-        <div
-          style={{
-            position: "absolute",
-            top: "50%",
-            left: "50%",
-            transform: "translate(-10%, -60%)",
-            width: "60vw",
-            maxWidth: "800px",
-            aspectRatio: "16/9",
-            backgroundColor: "#000",
-            borderRadius: "12px",
-            border: "8px solid #333",
-            boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
-            zIndex: 10,
-            overflow: "hidden",
-          }}
-        >
-          <video
-            ref={screenVideoRef}
-            autoPlay
-            playsInline
-            muted
-            style={{ width: "100%", height: "100%", objectFit: "contain" }}
-          />
-          <div
-            style={{
-              position: "absolute",
-              bottom: "10px",
-              right: "10px",
-              color: "rgba(255,255,255,0.5)",
-              fontSize: "12px",
-              pointerEvents: "none",
-            }}
-          >
-            AI Watching...
-          </div>
-        </div>
-      )}
-
+      {/* --- AI 응답 말풍선 --- */}
       {aiResponse && (
         <div
           style={{
@@ -385,6 +308,7 @@ const AiVtuber: React.FC = () => {
         </div>
       )}
 
+      {/* --- 하단 입력창 영역 --- */}
       <div
         style={{
           position: "fixed",
@@ -403,6 +327,7 @@ const AiVtuber: React.FC = () => {
           gap: "10px",
         }}
       >
+        {/* 선택된 이미지 미리보기 */}
         {selectedImages.length > 0 && (
           <div
             style={{
@@ -451,6 +376,7 @@ const AiVtuber: React.FC = () => {
           </div>
         )}
 
+        {/* 입력 컨트롤 (파일첨부 + 텍스트 + 전송버튼) */}
         <div style={{ display: "flex", alignItems: "flex-end", gap: "10px" }}>
           <input
             type="file"
@@ -478,6 +404,7 @@ const AiVtuber: React.FC = () => {
           <textarea
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
+            onPaste={handlePaste}
             onKeyDown={handleKeyDown}
             placeholder={
               isStreaming ? "AI가 답변 중입니다..." : "메시지를 입력하세요..."
