@@ -1,9 +1,8 @@
 import React, { useState, useRef, useEffect } from "react";
-import Live2DViewerCompo from "../Component/Live2DViewerCompo";
-// [추가됨] Live2D 제어용 타입과 모션 상수 import (경로를 실제 파일 위치에 맞게 수정하세요)
-import { MAO_MOTIONS, Live2DController } from "../Component/Live2DMaoConstants";
+import Live2DViewerCompo from "../Component/Live2DViewerCompo"; // 경로 확인 필요
 import { GoogleGenerativeAI, ChatSession } from "@google/generative-ai";
 
+// API 키 설정 (실제 배포 시에는 .env 파일 사용 권장: import.meta.env.VITE_GEMINI_API_KEY)
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(API_KEY);
 
@@ -11,19 +10,20 @@ const AiVtuber: React.FC = () => {
   const [inputText, setInputText] = useState("");
   const [selectedImages, setSelectedImages] = useState<File[]>([]);
 
+  // [추가] AI 응답 관련 상태
   const [aiResponse, setAiResponse] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const chatSessionRef = useRef<ChatSession | null>(null);
 
+  // [기존] 화면 공유 스트림 상태
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const screenVideoRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  /** 말하고 있는지 여부 확인하는 State */
   const [isSpeaking, setIsSpeaking] = useState(false);
 
-  // [추가됨] Live2D 뷰어를 제어하기 위한 Ref 생성
-  const live2dRef = useRef<Live2DController>(null);
-
+  // ... (화면 공유 관련 코드는 기존과 동일하므로 생략하지 않고 그대로 유지) ...
   const handleStartScreenShare = async () => {
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -52,6 +52,7 @@ const AiVtuber: React.FC = () => {
     }
   }, [screenStream]);
 
+  /** 브라우저 목소리 로드 (Chrome 등에서 필요) */
   useEffect(() => {
     const loadVoices = () => {
       window.speechSynthesis.getVoices();
@@ -60,6 +61,7 @@ const AiVtuber: React.FC = () => {
     window.speechSynthesis.onvoiceschanged = loadVoices;
   }, []);
 
+  // [추가] 파일을 Gemini가 이해할 수 있는 포맷(Base64)으로 변환하는 헬퍼 함수
   const fileToGenerativePart = async (file: File) => {
     const base64EncodedDataPromise = new Promise<string>((resolve) => {
       const reader = new FileReader();
@@ -74,21 +76,23 @@ const AiVtuber: React.FC = () => {
     };
   };
 
+  /** 대화 초기화(Reset) 핸들러 */
   const handleResetChat = () => {
-    if (isStreaming) return;
+    if (isStreaming) return; // 대화 생성 중에는 초기화 방지
+
+    // 1. 세션 참조를 null로 만들어서 다음 전송 때 startChat이 새로 호출되게 함
     chatSessionRef.current = null;
-    setAiResponse("");
+
+    // 2. UI 상태 초기화
+    setAiResponse(""); // 말풍선 닫기
     setInputText("");
     setSelectedImages([]);
+
+    // (선택 사항) 사용자에게 초기화됨을 알리고 싶다면 아래 주석 해제
+    // alert("대화가 초기화되었습니다. 새로운 주제로 대화해보세요!");
   };
 
-  // [추가됨] 모션 재생 헬퍼 함수 (편리한 사용을 위해)
-  const triggerMotion = (motionKey: keyof typeof MAO_MOTIONS) => {
-    if (live2dRef.current) {
-      live2dRef.current.playMotion(motionKey);
-    }
-  };
-
+  /** TTS 함수 */
   const speak = (text: string) => {
     if (typeof window !== "undefined" && window.speechSynthesis) {
       const utterance = new SpeechSynthesisUtterance(text);
@@ -102,16 +106,17 @@ const AiVtuber: React.FC = () => {
       );
       if (korVoice) utterance.voice = korVoice;
 
+      // [추가] 말하기 시작할 때 입 움직임 켜기
       utterance.onstart = () => {
         setIsSpeaking(true);
-        // [예시] 말하기 시작할 때 특정 제스처를 취하게 할 수 있음
-        // triggerMotion("TAP_BODY_2");
       };
 
+      // [추가] 말하기 끝나면 입 움직임 끄기
       utterance.onend = () => {
         setIsSpeaking(false);
       };
 
+      // [추가] 에러 발생 등으로 중단되어도 입 닫기
       utterance.onerror = () => {
         setIsSpeaking(false);
       };
@@ -120,62 +125,76 @@ const AiVtuber: React.FC = () => {
     }
   };
 
+  /** 메시지 전송 및 스트리밍 핸들러 */
   const handleSendMessage = async () => {
     if ((!inputText.trim() && selectedImages.length === 0) || isStreaming)
       return;
 
-    setAiResponse("");
+    // 1. UI 초기화
+    setAiResponse(""); // 이전 대화 지우기 (원하면 누적하도록 수정 가능)
     setIsStreaming(true);
 
+    // 전송할 텍스트와 이미지 백업 (입력창 비우기 전)
     const prompt = inputText;
     const imagesToSend = [...selectedImages];
 
+    // 입력창 비우기
     setInputText("");
     setSelectedImages([]);
 
-    // [예시] 질문을 보낼 때 '고민하는' 모션이나 '일반' 모션 재생
-    triggerMotion("TAP_BODY_1");
-
     try {
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      // 2. 모델 준비 (gemini-1.5-flash 가 속도와 가성비가 좋음)
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
+      // 채팅 세션이 없으면 새로 시작 (최초 1회 실행)
       if (!chatSessionRef.current) {
         chatSessionRef.current = model.startChat({
+          // 필요하면 여기에 시스템 프롬프트 역할을 하는 초기 대화를 넣을 수 있습니다.
+          // 예: role: "user", parts: [{ text: "너는 친절한 AI 버튜버야." }]
           history: [],
         });
       }
 
+      // 3. 이미지 데이터 변환
       const imageParts = await Promise.all(
         imagesToSend.map((file) => fileToGenerativePart(file))
       );
 
+      // 4. 스트리밍 요청 (텍스트 + 이미지)
+      // 화면 공유 중이라면 스크린샷 로직도 여기에 추가 가능
       const result = await chatSessionRef.current.sendMessageStream([
         prompt,
         ...imageParts,
       ]);
 
-      let currentSentence = "";
+      let accumulatedText = ""; // 전체 텍스트 누적
+      let currentSentence = ""; // 현재 읽을 문장 버퍼
 
+      // 5. 스트림 청크(조각) 처리
       for await (const chunk of result.stream) {
         const chunkText = chunk.text();
+
+        // 화면 표시용 누적
         setAiResponse((prev) => prev + chunkText);
+
+        // TTS용 문장 단위 처리
         currentSentence += chunkText;
 
+        // 문장 끝 기호가 나오면 읽기 (. ! ? \n)
         if (/[.!?\n]/.test(chunkText)) {
           speak(currentSentence);
-          currentSentence = "";
+          currentSentence = ""; // 읽었으니 비움
         }
       }
 
+      // 혹시 남은 문장이 있다면 마저 읽기
       if (currentSentence.trim()) {
         speak(currentSentence);
       }
-
-      // [예시] 답변이 끝나면 스페셜 모션 (기분 좋음 등)
-      // triggerMotion("SPECIAL_HEART");
     } catch (error: any) {
       console.error("Gemini API Error:", error);
       setAiResponse("에러가 발생했습니다. (채팅 세션 초기화)");
+      // 에러 나면 세션을 초기화해주는 것이 좋습니다.
       chatSessionRef.current = null;
     } finally {
       setIsStreaming(false);
@@ -212,6 +231,7 @@ const AiVtuber: React.FC = () => {
         overflow: "hidden",
       }}
     >
+      {/* ... (헤더 부분 기존과 동일) ... */}
       <div
         style={{
           position: "absolute",
@@ -233,6 +253,7 @@ const AiVtuber: React.FC = () => {
           AI Vtuber
         </h1>
 
+        {/* [추가] 대화 초기화 버튼 */}
         <button
           onClick={handleResetChat}
           disabled={isStreaming}
@@ -241,7 +262,7 @@ const AiVtuber: React.FC = () => {
             fontSize: "14px",
             borderRadius: "8px",
             border: "none",
-            background: isStreaming ? "#aaa" : "#50E3C2",
+            background: isStreaming ? "#aaa" : "#50E3C2", // 민트색 계열로 구분
             color: "white",
             cursor: isStreaming ? "not-allowed" : "pointer",
             boxShadow: "0 2px 5px rgba(0,0,0,0.2)",
@@ -249,6 +270,7 @@ const AiVtuber: React.FC = () => {
             alignItems: "center",
             gap: "5px",
           }}
+          title="대화 내용을 모두 지우고 새로 시작합니다"
         >
           🔄 대화 초기화
         </button>
@@ -288,30 +310,9 @@ const AiVtuber: React.FC = () => {
         )}
       </div>
 
-      {/* [수정됨] Ref 연결 */}
-      <Live2DViewerCompo ref={live2dRef} isSpeaking={isSpeaking} />
+      <Live2DViewerCompo isSpeaking={isSpeaking} />
 
-      {/* [추가됨] 모션 테스트 버튼들 (우측 상단) */}
-      <div
-        style={{
-          position: "absolute",
-          top: 80,
-          right: 20,
-          zIndex: 60,
-          display: "flex",
-          flexDirection: "column",
-          gap: "8px",
-        }}
-      >
-        <button onClick={() => triggerMotion("SPECIAL_HEART")}>
-          ❤️ 하트 발사
-        </button>
-        <button onClick={() => triggerMotion("SPECIAL_RABBIT_MAGIC")}>
-          🐰 토끼 마술
-        </button>
-        <button onClick={() => triggerMotion("TAP_BODY_3")}>👋 인사</button>
-      </div>
-
+      {/* 화면 공유 영역 (기존 코드) */}
       {screenStream && (
         <div
           style={{
@@ -352,20 +353,21 @@ const AiVtuber: React.FC = () => {
         </div>
       )}
 
+      {/* [추가] AI 응답 말풍선 (캐릭터 옆에 표시) */}
       {aiResponse && (
         <div
           style={{
             position: "absolute",
-            bottom: "200px",
-            left: "10%",
+            bottom: "200px", // 캐릭터 머리 위나 옆 적절한 위치
+            left: "10%", // Live2D 모델 위치 근처
             width: "300px",
             padding: "15px",
             backgroundColor: "rgba(255, 255, 255, 0.9)",
             borderRadius: "20px",
-            borderBottomLeftRadius: "0",
+            borderBottomLeftRadius: "0", // 말풍선 꼬리 느낌
             boxShadow: "0 4px 15px rgba(0,0,0,0.1)",
             zIndex: 40,
-            whiteSpace: "pre-wrap",
+            whiteSpace: "pre-wrap", // 줄바꿈 적용
             fontSize: "16px",
             lineHeight: "1.5",
             animation: "fadeIn 0.3s ease-out",
@@ -385,6 +387,7 @@ const AiVtuber: React.FC = () => {
         </div>
       )}
 
+      {/* 채팅 입력 컨테이너 (기존 디자인 유지 + 로딩 상태 처리) */}
       <div
         style={{
           position: "fixed",
@@ -403,6 +406,7 @@ const AiVtuber: React.FC = () => {
           gap: "10px",
         }}
       >
+        {/* 이미지 미리보기 */}
         {selectedImages.length > 0 && (
           <div
             style={{
@@ -451,6 +455,7 @@ const AiVtuber: React.FC = () => {
           </div>
         )}
 
+        {/* 입력 컨트롤 */}
         <div style={{ display: "flex", alignItems: "flex-end", gap: "10px" }}>
           <input
             type="file"
@@ -483,7 +488,7 @@ const AiVtuber: React.FC = () => {
               isStreaming ? "AI가 답변 중입니다..." : "메시지를 입력하세요..."
             }
             rows={1}
-            disabled={isStreaming}
+            disabled={isStreaming} // 스트리밍 중 입력 방지
             style={{
               flex: 1,
               padding: "12px",
@@ -502,7 +507,7 @@ const AiVtuber: React.FC = () => {
 
           <button
             onClick={handleSendMessage}
-            disabled={isStreaming}
+            disabled={isStreaming} // 스트리밍 중 버튼 비활성화
             style={{
               height: "46px",
               padding: "0 20px",
