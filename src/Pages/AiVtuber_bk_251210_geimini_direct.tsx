@@ -1,18 +1,17 @@
 import React, { useState, useRef, useEffect } from "react";
 import Live2DViewerCompo from "../Component/Live2DViewerCompo";
 import { MAO_MOTIONS, Live2DController } from "../Component/Live2DMaoConstants";
+import { GoogleGenerativeAI, ChatSession } from "@google/generative-ai";
 
-// [삭제됨] Gemini SDK 제거
-// import { GoogleGenerativeAI, ChatSession } from "@google/generative-ai";
-
-// [설정] 커스텀 백엔드 URL
-const BACKEND_URL = import.meta.env.VITE_LLAMAINDEX_SERVER_URL;
+// 환경변수에서 API 키 가져오기
+const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+const genAI = new GoogleGenerativeAI(API_KEY);
 
 // 대화 메시지 타입 정의
 interface ChatMessage {
   role: "user" | "ai";
   text: string;
-  images?: string[]; // 이미지 미리보기용 URL
+  images?: string[]; // 이미지 미리보기용 URL (선택사항)
 }
 
 const AiVtuber: React.FC = () => {
@@ -27,7 +26,7 @@ const AiVtuber: React.FC = () => {
   const [isSpeaking, setIsSpeaking] = useState(false);
 
   // --- Refs ---
-  // const chatSessionRef = useRef<ChatSession | null>(null); // [삭제됨] 세션 불필요
+  const chatSessionRef = useRef<ChatSession | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const live2dRef = useRef<Live2DController>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null); // 스크롤 제어용
@@ -49,13 +48,28 @@ const AiVtuber: React.FC = () => {
     }
   }, [chatHistory, isStreaming]);
 
+  // --- 헬퍼 함수: 이미지 파일을 Gemini용 포맷으로 변환 ---
+  const fileToGenerativePart = async (file: File) => {
+    const base64EncodedDataPromise = new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve((reader.result as string).split(",")[1]);
+      reader.readAsDataURL(file);
+    });
+    return {
+      inlineData: {
+        data: await base64EncodedDataPromise,
+        mimeType: file.type,
+      },
+    };
+  };
+
   // --- 채팅 초기화 ---
   const handleResetChat = () => {
     if (isStreaming) return;
+    chatSessionRef.current = null;
     setChatHistory([]); // 기록 초기화
     setInputText("");
     setSelectedImages([]);
-    // 백엔드 인덱스는 서버 상태이므로 여기서 초기화할 수 없으나, 클라이언트 화면은 초기화됨
   };
 
   // --- Live2D 모션 재생 함수 ---
@@ -68,11 +82,7 @@ const AiVtuber: React.FC = () => {
   // --- TTS (말하기) 함수 ---
   const speak = (text: string) => {
     if (typeof window !== "undefined" && window.speechSynthesis) {
-      // 텍스트 정제 (특수문자 등이 TTS를 방해하지 않도록)
-      const cleanText = text.replace(/[*#\-]/g, "").trim();
-      if (!cleanText) return;
-
-      const utterance = new SpeechSynthesisUtterance(cleanText);
+      const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = "ko-KR";
       utterance.rate = 1.0;
       utterance.pitch = 1.0;
@@ -91,7 +101,7 @@ const AiVtuber: React.FC = () => {
     }
   };
 
-  // --- [핵심 수정] 메시지 전송 및 Custom Backend 호출 ---
+  // --- 메시지 전송 및 Gemini 호출 ---
   const handleSendMessage = async () => {
     if ((!inputText.trim() && selectedImages.length === 0) || isStreaming)
       return;
@@ -115,55 +125,41 @@ const AiVtuber: React.FC = () => {
     // 질문 보낼 때 모션
     triggerMotion("TAP_BODY_1");
 
-    // 2. AI 응답을 위한 빈 메시지 추가 (로딩 표시)
-    setChatHistory((prev) => [...prev, { role: "ai", text: "..." }]);
-
     try {
-      // --- FormData 생성 ---
-      const formData = new FormData();
-      formData.append("question", prompt); // Backend: question: str = Form(...)
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
-      // Backend는 파일 하나만 받으므로 첫 번째 이미지만 전송 (필요시 백엔드 수정 필요)
-      if (imagesToSend.length > 0) {
-        formData.append("file", imagesToSend[0]); // Backend: file: Optional[UploadFile]
+      if (!chatSessionRef.current) {
+        chatSessionRef.current = model.startChat({ history: [] });
       }
 
-      // --- Fetch 요청 (Streaming) ---
-      const response = await fetch(BACKEND_URL, {
-        method: "POST",
-        body: formData,
-      });
+      const imageParts = await Promise.all(
+        imagesToSend.map((file) => fileToGenerativePart(file))
+      );
 
-      if (!response.body) {
-        throw new Error("ReadableStream not supported in this browser.");
-      }
+      // 2. AI 응답을 위한 빈 메시지 추가 (나중에 스트리밍으로 채움)
+      setChatHistory((prev) => [
+        ...prev,
+        { role: "ai", text: "..." }, // 로딩 표시
+      ]);
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder("utf-8");
+      const result = await chatSessionRef.current.sendMessageStream([
+        prompt,
+        ...imageParts,
+      ]);
 
       let fullResponseText = "";
       let currentSentence = "";
-      let isFirstChunk = true;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunkText = decoder.decode(value, { stream: true });
-
-        // 첫 청크가 오면 "..." 로딩 메시지를 지우고 텍스트 시작
-        if (isFirstChunk) {
-          fullResponseText = ""; // "..." 제거
-          isFirstChunk = false;
-        }
-
+      for await (const chunk of result.stream) {
+        const chunkText = chunk.text();
         fullResponseText += chunkText;
         currentSentence += chunkText;
 
-        // 3. 스트리밍 중인 텍스트로 UI 업데이트
+        // 3. 스트리밍 중인 텍스트로 마지막 AI 메시지 업데이트
         setChatHistory((prev) => {
           const newHistory = [...prev];
           const lastIndex = newHistory.length - 1;
+          // 마지막 메시지가 AI 메시지라고 가정하고 업데이트
           if (newHistory[lastIndex].role === "ai") {
             newHistory[lastIndex] = {
               ...newHistory[lastIndex],
@@ -173,26 +169,27 @@ const AiVtuber: React.FC = () => {
           return newHistory;
         });
 
-        // 4. TTS 문장 단위 끊기 로직 (기존 유지)
+        // 문장 단위로 끊어서 읽기
         if (/[.!?\n]/.test(chunkText)) {
           speak(currentSentence);
           currentSentence = "";
         }
       }
 
-      // 스트림 종료 후 남은 문장 말하기
       if (currentSentence.trim()) {
         speak(currentSentence);
       }
     } catch (error: any) {
-      console.error("Backend API Error:", error);
+      console.error("Gemini API Error:", error);
+      // 에러 메시지 추가
       setChatHistory((prev) => [
         ...prev,
         {
           role: "ai",
-          text: `오류가 발생했습니다: ${error.message || "서버 연결 실패"}`,
+          text: "죄송해요, 에러가 발생했어요. 다시 말씀해 주시겠어요?",
         },
       ]);
+      chatSessionRef.current = null;
     } finally {
       setIsStreaming(false);
     }
@@ -266,7 +263,7 @@ const AiVtuber: React.FC = () => {
         <h1
           style={{ margin: 0, textShadow: "0 2px 4px rgba(255,255,255,0.8)" }}
         >
-          AI Vtuber (LlamaIndex)
+          AI Vtuber
         </h1>
         <button
           onClick={handleResetChat}
@@ -289,12 +286,13 @@ const AiVtuber: React.FC = () => {
       {/* --- Live2D 뷰어 (배경) --- */}
       <Live2DViewerCompo ref={live2dRef} isSpeaking={isSpeaking} />
 
-      {/* --- 우측 사이드 패널 --- */}
+      {/* --- [수정됨] 우측 사이드 패널 --- */}
       <div
         style={{
+          // position: 'fixed'를 사용하여 브라우저 창 기준으로 오른쪽 끝에 고정합니다.
           position: "fixed",
           top: "80px",
-          right: "4px",
+          right: "4px", // [수정] 오른쪽 끝에 아주 가깝게 붙임 (살짝 띄움)
           bottom: "160px",
           width: "360px",
           backgroundColor: "rgba(255, 255, 255, 0.8)",
@@ -308,13 +306,13 @@ const AiVtuber: React.FC = () => {
           overflow: "hidden",
         }}
       >
-        {/* 1. 모션 버튼 영역 */}
+        {/* 1. 모션 버튼 영역 (가로 일렬 배치) */}
         <div
           style={{
             padding: "10px",
             borderBottom: "1px solid #ddd",
             display: "flex",
-            flexDirection: "row",
+            flexDirection: "row", // [수정] 가로 방향 배치
             justifyContent: "space-between",
             gap: "5px",
             backgroundColor: "rgba(255,255,255,0.5)",
@@ -322,7 +320,7 @@ const AiVtuber: React.FC = () => {
         >
           <button
             onClick={() => triggerMotion("SPECIAL_HEART")}
-            style={{ ...btnStyle, flex: 1 }}
+            style={{ ...btnStyle, flex: 1 }} // [수정] flex: 1로 너비 균등 분할
           >
             ❤️ 하트
           </button>
@@ -340,7 +338,7 @@ const AiVtuber: React.FC = () => {
           </button>
         </div>
 
-        {/* 2. 채팅 내역 영역 */}
+        {/* 2. 채팅 내역 영역 (스크롤 가능) */}
         <div
           ref={chatContainerRef}
           style={{
@@ -403,7 +401,7 @@ const AiVtuber: React.FC = () => {
                   </div>
                 )}
 
-                {/* AI 이름 표시 */}
+                {/* AI 이름 표시 (선택 사항) */}
                 {msg.role === "ai" && (
                   <div
                     style={{
@@ -424,7 +422,7 @@ const AiVtuber: React.FC = () => {
         </div>
       </div>
 
-      {/* --- 하단 입력창 영역 --- */}
+      {/* --- 하단 입력창 영역 (기존 유지) --- */}
       <div
         style={{
           position: "fixed",
@@ -567,7 +565,7 @@ const AiVtuber: React.FC = () => {
   );
 };
 
-// 버튼 스타일
+// 버튼 스타일 간단 정의
 const btnStyle: React.CSSProperties = {
   padding: "8px",
   backgroundColor: "#fff",
