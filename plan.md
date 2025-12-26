@@ -62,3 +62,4 @@ https://github.com/AkHiL667/react-live2d-starter
 https://guansss.github.io/pixi-live2d-display/
 npm install pixi-live2d-display
 npm install pixi.js@6.5.10
+npm install react-unity-webgl

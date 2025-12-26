@@ -7,6 +7,7 @@ import Footer from "./Component/Footer";
 import Maze from "./Pages/Maze";
 import MazeRL from "./Pages/MazeRL";
 import AiVtuber from "./Pages/AiVtuber";
+import UnityGameCompo from "./Component/UnityGameCompo";
 
 function App() {
   return (
@@ -16,6 +17,7 @@ function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/aivtuber" element={<AiVtuber />} />
+          <Route path="/unitychan" element={<UnityGameCompo />} />
           <Route path="/maze" element={<Maze />} />
           <Route path="/mazerl" element={<MazeRL />} />
         </Routes>
