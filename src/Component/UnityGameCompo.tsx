@@ -369,7 +369,7 @@ const UnityGameCompo: React.FC = () => {
           setTimeout(() => {
             console.log("Reset Face to Default");
             sendMessage("unitychan_dynamic", "OnFaceAnim", "FaceDefault");
-          }, 3000);
+          }, 5000);
         }
       }
 
