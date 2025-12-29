@@ -145,6 +145,21 @@ const previewCloseButtonStyle: React.CSSProperties = {
   justifyContent: "center",
 };
 
+const FACE_ANIMS = [
+  "FaceDefault",
+  "FaceSmile1",
+  "FaceSmile2",
+  "FaceAngry1",
+  "FaceAngry2",
+  "FaceSap",
+  "FaceConf",
+  "FaceEyeClosed",
+  "FaceDistract",
+  "FaceAshamed",
+];
+
+const BODY_ANIMS = ["DoDamage0", "DoDamage1", "DoLose", "DoReflesh", "DoJump"];
+
 const UnityGameCompo: React.FC = () => {
   const { unityProvider, isLoaded, loadingProgression, sendMessage } =
     useUnityContext({
@@ -221,24 +236,20 @@ const UnityGameCompo: React.FC = () => {
   // 서버 스트리밍 통신 로직
   // -------------------------------------------------------------
   const handleSendMessage = async () => {
-    // 텍스트도 없고 이미지도 없으면 리턴
     if ((!input.trim() && !selectedFile) || isAiThinking) return;
 
     const userText = input;
     const userMsgId = Date.now();
-
-    // 현재 미리보기 URL을 메시지 기록용으로 저장 (전송 후엔 상태 초기화하므로)
     const currentImageUrl = previewUrl;
 
-    // 1. 유저 메시지 즉시 추가
+    // 1. 유저 메시지 UI 추가
     const userMsg: ChatMessage = {
       id: userMsgId,
       sender: "User",
       text: userText,
-      imageUrl: currentImageUrl || undefined, // 이미지가 있으면 보여줌
+      imageUrl: currentImageUrl || undefined,
     };
 
-    // 2. AI 빈 메시지 미리 생성
     const aiMsgId = userMsgId + 1;
     const aiPlaceholder: ChatMessage = {
       id: aiMsgId,
@@ -250,40 +261,34 @@ const UnityGameCompo: React.FC = () => {
 
     // 상태 초기화
     setInput("");
-    setSelectedFile(null); // 전송했으니 파일 큐 비우기
-    setPreviewUrl(null); // 미리보기 큐 비우기 (URL은 userMsg에서 계속 씀)
+    setSelectedFile(null);
+    setPreviewUrl(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
-
     setIsAiThinking(true);
 
-    try {
-      // 3. 서버로 전송 (FormData)
-      const formData = new FormData();
-      formData.append("question", userText); // 텍스트가 비어있어도 이미지가 있으면 보냄
-      formData.append("session_id", sessionId);
+    // [변경 1] OnTalk(말하기 입모양) 시작 부분 제거함 (TTS 연동 위해)
+    // if (isLoaded) sendMessage("unitychan_dynamic", "OnTalk", "true");
 
-      // [추가] 파일이 있으면 FormData에 추가
-      if (selectedFile) {
-        formData.append("file", selectedFile);
-      }
+    try {
+      const formData = new FormData();
+      formData.append("question", userText);
+      formData.append("session_id", sessionId);
+      if (selectedFile) formData.append("file", selectedFile);
 
       const response = await fetch(
         "https://wildojisan-cnn-hf-2509.hf.space/llama_index/query_stream",
-        {
-          method: "POST",
-          body: formData,
-        }
+        { method: "POST", body: formData }
       );
 
-      if (!response.body) {
-        throw new Error(
-          "ReadableStream not supported by browser or response is empty."
-        );
-      }
+      if (!response.body) throw new Error("ReadableStream not supported.");
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder("utf-8");
       let done = false;
+      let buffer = "";
+
+      // [변경 2] 스트리밍 중에 발견된 태그를 모아둘 배열
+      const detectedTags: string[] = [];
 
       while (!done) {
         const { value, done: streamDone } = await reader.read();
@@ -291,25 +296,94 @@ const UnityGameCompo: React.FC = () => {
 
         if (value) {
           const chunk = decoder.decode(value, { stream: true });
-          setMessages((prevMessages) =>
-            prevMessages.map((msg) =>
-              msg.id === aiMsgId ? { ...msg, text: msg.text + chunk } : msg
-            )
-          );
+          buffer += chunk;
+
+          const tagRegex = /\[\[(.*?)\]\]/g;
+          let match;
+
+          while ((match = tagRegex.exec(buffer)) !== null) {
+            const fullTag = match[0];
+            const tagName = match[1];
+
+            // [변경 3] 즉시 실행하지 않고 리스트에 저장만 함
+            detectedTags.push(tagName);
+
+            // 텍스트에서는 태그 제거 (UI 깔끔하게)
+            buffer = buffer.replace(fullTag, "");
+            tagRegex.lastIndex = 0;
+          }
+
+          // 미완성 태그 처리 로직 (기존과 동일)
+          const openBracketIndex = buffer.lastIndexOf("[[");
+          const closeBracketIndex = buffer.lastIndexOf("]]");
+          let textToDisplay = "";
+
+          if (openBracketIndex !== -1 && openBracketIndex > closeBracketIndex) {
+            textToDisplay = buffer.substring(0, openBracketIndex);
+            buffer = buffer.substring(openBracketIndex);
+          } else {
+            textToDisplay = buffer;
+            buffer = "";
+          }
+
+          if (textToDisplay) {
+            setMessages((prevMessages) =>
+              prevMessages.map((msg) =>
+                msg.id === aiMsgId
+                  ? { ...msg, text: msg.text + textToDisplay }
+                  : msg
+              )
+            );
+          }
         }
       }
+
+      // ---------------------------------------------------------
+      // [변경 4] 스트리밍(응답)이 완전히 끝난 후 애니메이션 실행
+      // ---------------------------------------------------------
+      if (isLoaded && detectedTags.length > 0) {
+        // 여러 태그가 감지되었다면, 보통 문맥상 '마지막' 태그가 최종 감정일 가능성이 높음
+        // 혹은 우선순위에 따라 detectedTags를 순회하며 실행해도 됨.
+        // 여기서는 '가장 마지막에 나온 표정/행동'을 수행하도록 구현.
+
+        // 1. 마지막으로 감지된 표정 찾기
+        const lastFace = detectedTags
+          .reverse()
+          .find((tag) => FACE_ANIMS.includes(tag));
+
+        // 2. 마지막으로 감지된 몸짓 찾기 (reverse 했으니 앞에서 찾음)
+        const lastBody = detectedTags.find((tag) => BODY_ANIMS.includes(tag));
+
+        // 몸짓 실행
+        if (lastBody) {
+          console.log("Play Body Anim:", lastBody);
+          sendMessage("unitychan_dynamic", "OnBodyAnim", lastBody);
+        }
+
+        // 표정 실행 및 3초 뒤 리셋
+        if (lastFace) {
+          console.log("Play Face Anim:", lastFace);
+          sendMessage("unitychan_dynamic", "OnFaceAnim", lastFace);
+
+          // [핵심] 3초 뒤 기본 표정으로 복귀
+          setTimeout(() => {
+            console.log("Reset Face to Default");
+            sendMessage("unitychan_dynamic", "OnFaceAnim", "FaceDefault");
+          }, 3000);
+        }
+      }
+
+      // 나중에 TTS 코드가 들어갈 자리
+      // playTTS(fullText);
     } catch (error) {
       console.error("Streaming error:", error);
       setMessages((prev) => [
         ...prev,
-        {
-          id: Date.now(),
-          sender: "System",
-          text: "AI 서버 연결에 실패했습니다.",
-        },
+        { id: Date.now(), sender: "System", text: "오류가 발생했습니다." },
       ]);
     } finally {
       setIsAiThinking(false);
+      // [변경 5] OnTalk 종료 코드 제거함 (어차피 시작을 안 했으므로)
     }
   };
 
