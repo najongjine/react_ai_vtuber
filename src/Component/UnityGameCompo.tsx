@@ -159,6 +159,7 @@ const FACE_ANIMS = [
 ];
 
 const BODY_ANIMS = ["DoDamage0", "DoDamage1", "DoLose", "DoReflesh", "DoJump"];
+const BACKEND_URL = import.meta.env.VITE_LLAMAINDEX_SERVER_URL;
 
 const UnityGameCompo: React.FC = () => {
   const { unityProvider, isLoaded, loadingProgression, sendMessage } =
@@ -275,10 +276,10 @@ const UnityGameCompo: React.FC = () => {
       formData.append("session_id", sessionId);
       if (selectedFile) formData.append("file", selectedFile);
 
-      const response = await fetch(
-        "https://wildojisan-cnn-hf-2509.hf.space/llama_index/query_stream",
-        { method: "POST", body: formData }
-      );
+      const response = await fetch(BACKEND_URL, {
+        method: "POST",
+        body: formData,
+      });
 
       if (!response.body) throw new Error("ReadableStream not supported.");
 
