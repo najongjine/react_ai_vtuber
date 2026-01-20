@@ -6,7 +6,7 @@ interface ChatMessage {
   id: number;
   sender: "User" | "Vtuber" | "System";
   text: string;
-  imageUrl?: string; // 이미지 미리보기를 위해 추가
+  attachments?: { url: string; type: string; name: string }[]; // 모든 파일 지원
 }
 
 // 1. 전체 컨테이너
@@ -118,6 +118,7 @@ const previewContainerStyle: React.CSSProperties = {
   display: "flex",
   padding: "0 10px",
   gap: "10px",
+  overflowX: "auto",
 };
 
 const previewImageWrapperStyle: React.CSSProperties = {
@@ -174,8 +175,8 @@ const UnityGameCompo: React.FC = () => {
   const [isAiThinking, setIsAiThinking] = useState(false);
 
   // [추가] 파일 업로드 관련 상태
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [previewUrls, setPreviewUrls] = useState<string[]>([]);
 
   const [messages, setMessages] = useState<ChatMessage[]>([
     { id: 1, sender: "System", text: "AI Vtuber 시스템에 접속했습니다." },
@@ -191,7 +192,7 @@ const UnityGameCompo: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null); // [추가] 파일 인풋용 Ref
 
   const [sessionId] = useState(
-    () => "user_" + Math.random().toString(36).substr(2, 9)
+    () => "user_" + Math.random().toString(36).substr(2, 9),
   );
 
   useEffect(() => {
@@ -200,10 +201,11 @@ const UnityGameCompo: React.FC = () => {
 
   // 파일 선택 해제 시 메모리 해제
   useEffect(() => {
+    // 실제 운영 환경에서는 언마운트 시 revoke 로직을 더 정교하게 짤 필요가 있음
     return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      // 명시적 삭제(removeFile)시에만 revoke 수행함.
     };
-  }, [previewUrl]);
+  }, []);
 
   const handleAnim = (funcName: string, param: string) => {
     if (!isLoaded) return;
@@ -213,23 +215,35 @@ const UnityGameCompo: React.FC = () => {
   // -------------------------------------------------------------
   // [추가] 파일 처리 로직 (선택 및 붙여넣기 공통)
   // -------------------------------------------------------------
-  const handleFileProcess = (file: File) => {
-    if (!file.type.startsWith("image/")) {
-      alert("이미지 파일만 첨부 가능합니다.");
-      return;
-    }
-    setSelectedFile(file);
-    const url = URL.createObjectURL(file);
-    setPreviewUrl(url);
+  const handleFileProcess = (files: File[]) => {
+    const newFiles: File[] = [];
+    const newUrls: string[] = [];
+
+    Array.from(files).forEach((file) => {
+      // 모든 파일 허용
+      newFiles.push(file);
+      newUrls.push(URL.createObjectURL(file));
+    });
+
+    setSelectedFiles((prev: File[]) => [...prev, ...newFiles]);
+    setPreviewUrls((prev: string[]) => [...prev, ...newUrls]);
   };
 
-  const clearFile = () => {
-    setSelectedFile(null);
-    if (previewUrl) {
-      URL.revokeObjectURL(previewUrl);
-      setPreviewUrl(null);
-    }
-    // file input 초기화 (같은 파일 다시 선택 가능하게)
+  const removeFile = (index: number) => {
+    URL.revokeObjectURL(previewUrls[index]);
+    setSelectedFiles((prev: File[]) =>
+      prev.filter((_: File, i: number) => i !== index),
+    );
+    setPreviewUrls((prev: string[]) =>
+      prev.filter((_: string, i: number) => i !== index),
+    );
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const clearFiles = () => {
+    // 전송 후에는 미리보기 URL을 revoke하지 않음 (채팅창에 남기기 위함)
+    setSelectedFiles([]);
+    setPreviewUrls([]);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -237,18 +251,23 @@ const UnityGameCompo: React.FC = () => {
   // 서버 스트리밍 통신 로직
   // -------------------------------------------------------------
   const handleSendMessage = async () => {
-    if ((!input.trim() && !selectedFile) || isAiThinking) return;
+    if ((!input.trim() && selectedFiles.length === 0) || isAiThinking) return;
 
     const userText = input;
     const userMsgId = Date.now();
-    const currentImageUrl = previewUrl;
+
+    const attachments = selectedFiles.map((file, index) => ({
+      url: previewUrls[index],
+      type: file.type,
+      name: file.name,
+    }));
 
     // 1. 유저 메시지 UI 추가
     const userMsg: ChatMessage = {
       id: userMsgId,
       sender: "User",
       text: userText,
-      imageUrl: currentImageUrl || undefined,
+      attachments: attachments.length > 0 ? attachments : undefined,
     };
 
     const aiMsgId = userMsgId + 1;
@@ -262,9 +281,8 @@ const UnityGameCompo: React.FC = () => {
 
     // 상태 초기화
     setInput("");
-    setSelectedFile(null);
-    setPreviewUrl(null);
-    if (fileInputRef.current) fileInputRef.current.value = "";
+    clearFiles();
+    setIsAiThinking(true);
     setIsAiThinking(true);
 
     // [변경 1] OnTalk(말하기 입모양) 시작 부분 제거함 (TTS 연동 위해)
@@ -274,7 +292,9 @@ const UnityGameCompo: React.FC = () => {
       const formData = new FormData();
       formData.append("question", userText);
       formData.append("session_id", sessionId);
-      if (selectedFile) formData.append("file", selectedFile);
+      selectedFiles.forEach((file: File) => {
+        formData.append("file", file);
+      });
 
       const response = await fetch(BACKEND_URL, {
         method: "POST",
@@ -332,8 +352,8 @@ const UnityGameCompo: React.FC = () => {
               prevMessages.map((msg) =>
                 msg.id === aiMsgId
                   ? { ...msg, text: msg.text + textToDisplay }
-                  : msg
-              )
+                  : msg,
+              ),
             );
           }
         }
@@ -414,14 +434,17 @@ const UnityGameCompo: React.FC = () => {
       const items = e.clipboardData?.items;
       if (!items) return;
 
+      const pastedFiles: File[] = [];
       for (let i = 0; i < items.length; i++) {
-        if (items[i].type.indexOf("image") !== -1) {
+        if (items[i].kind === "file") {
           const file = items[i].getAsFile();
-          if (file) {
-            handleFileProcess(file);
-            e.preventDefault(); // 이미지를 붙여넣었으므로 텍스트창엔 아무것도 안 들어가게 함
-          }
+          if (file) pastedFiles.push(file);
         }
+      }
+
+      if (pastedFiles.length > 0) {
+        handleFileProcess(pastedFiles);
+        e.preventDefault();
       }
     };
 
@@ -437,7 +460,7 @@ const UnityGameCompo: React.FC = () => {
       textarea.removeEventListener("keypress", stopPropagation);
       textarea.removeEventListener("paste", handleNativePaste);
     };
-  }, [input, selectedFile, handleSendMessage]); // 의존성 배열에 selectedFile 등 추가
+  }, [input, selectedFiles, handleSendMessage]); // 의존성 배열에 selectedFiles 등 추가
 
   return (
     <div style={containerStyle}>
@@ -517,15 +540,34 @@ const UnityGameCompo: React.FC = () => {
                   </div>
                 )}
                 {/* [추가] 사용자가 보낸 이미지 표시 */}
-                {msg.imageUrl && (
-                  <div style={{ marginBottom: "5px" }}>
-                    <img
-                      src={msg.imageUrl}
-                      alt="uploaded"
-                      style={{ maxWidth: "100%", borderRadius: "8px" }}
-                    />
-                  </div>
-                )}
+                {/* [추가] 사용자가 보낸 파일 표시 */}
+                {msg.attachments &&
+                  msg.attachments.map((att, idx) => (
+                    <div key={idx} style={{ marginBottom: "5px" }}>
+                      {att.type.startsWith("image/") ? (
+                        <img
+                          src={att.url}
+                          alt={`uploaded-${idx}`}
+                          style={{ maxWidth: "100%", borderRadius: "8px" }}
+                        />
+                      ) : (
+                        <div
+                          style={{
+                            backgroundColor: "rgba(255,255,255,0.1)",
+                            padding: "10px",
+                            borderRadius: "8px",
+                            fontSize: "13px",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "8px",
+                          }}
+                        >
+                          <span>📄</span>
+                          <span>{att.name}</span>
+                        </div>
+                      )}
+                    </div>
+                  ))}
                 <span style={{ whiteSpace: "pre-wrap" }}>{msg.text}</span>
               </div>
             ))}
@@ -537,22 +579,59 @@ const UnityGameCompo: React.FC = () => {
         <div style={bottomSectionStyle}>
           <div style={controlBarStyle}>
             {/* [추가] 이미지 미리보기 영역 (파일이 있을 때만 보임) */}
-            {selectedFile && previewUrl && (
+            {selectedFiles.length > 0 && (
               <div style={previewContainerStyle}>
-                <div style={previewImageWrapperStyle}>
-                  <img
-                    src={previewUrl}
-                    alt="preview"
-                    style={{
-                      width: "100%",
-                      height: "100%",
-                      objectFit: "cover",
-                    }}
-                  />
-                  <button onClick={clearFile} style={previewCloseButtonStyle}>
-                    ✕
-                  </button>
-                </div>
+                {selectedFiles.map((file, index) => (
+                  <div key={index} style={previewImageWrapperStyle}>
+                    {file.type.startsWith("image/") ? (
+                      <img
+                        src={previewUrls[index]}
+                        alt={`preview-${index}`}
+                        style={{
+                          width: "100%",
+                          height: "100%",
+                          objectFit: "cover",
+                        }}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          width: "100%",
+                          height: "100%",
+                          display: "flex",
+                          justifyContent: "center",
+                          alignItems: "center",
+                          backgroundColor: "#333",
+                          color: "white",
+                          flexDirection: "column",
+                          fontSize: "10px",
+                          textAlign: "center",
+                          padding: "2px",
+                        }}
+                      >
+                        <div style={{ fontSize: "16px", marginBottom: "2px" }}>
+                          📄
+                        </div>
+                        <div
+                          style={{
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            width: "100%",
+                          }}
+                        >
+                          {file.name}
+                        </div>
+                      </div>
+                    )}
+                    <button
+                      onClick={() => removeFile(index)}
+                      style={previewCloseButtonStyle}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
                 <div
                   style={{
                     display: "flex",
@@ -561,7 +640,7 @@ const UnityGameCompo: React.FC = () => {
                     color: "#ccc",
                   }}
                 >
-                  이미지 첨부됨
+                  {selectedFiles.length}장 첨부됨
                 </div>
               </div>
             )}
@@ -570,12 +649,13 @@ const UnityGameCompo: React.FC = () => {
               {/* [추가] 숨겨진 파일 인풋 */}
               <input
                 type="file"
-                accept="image/*"
+                // accept 제거하여 모든 파일 허용
+                multiple
                 ref={fileInputRef}
                 style={{ display: "none" }}
                 onChange={(e) => {
-                  if (e.target.files && e.target.files[0]) {
-                    handleFileProcess(e.target.files[0]);
+                  if (e.target.files && e.target.files.length > 0) {
+                    handleFileProcess(Array.from(e.target.files));
                   }
                 }}
               />
