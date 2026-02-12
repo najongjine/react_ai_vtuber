@@ -26,9 +26,6 @@ const AiVtuber: React.FC = () => {
   const [isStreaming, setIsStreaming] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
 
-  // 세션 ID 생성
-  const [sessionId] = useState(() => "user_" + Math.random().toString(36).substr(2, 9));
-
   // --- Refs ---
   // const chatSessionRef = useRef<ChatSession | null>(null); // [삭제됨] 세션 불필요
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -125,13 +122,10 @@ const AiVtuber: React.FC = () => {
       // --- FormData 생성 ---
       const formData = new FormData();
       formData.append("question", prompt); // Backend: question: str = Form(...)
-      formData.append("session_id", sessionId); // Backend: session_id: str = Form(...)
 
-      // 파일 처리 (Backend: files: List[UploadFile])
+      // Backend는 파일 하나만 받으므로 첫 번째 이미지만 전송 (필요시 백엔드 수정 필요)
       if (imagesToSend.length > 0) {
-        imagesToSend.forEach((file) => {
-          formData.append("file", file);
-        });
+        formData.append("file", imagesToSend[0]); // Backend: file: Optional[UploadFile]
       }
 
       // --- Fetch 요청 (Streaming) ---
@@ -155,7 +149,6 @@ const AiVtuber: React.FC = () => {
         const { done, value } = await reader.read();
         if (done) break;
 
-
         const chunkText = decoder.decode(value, { stream: true });
 
         // 첫 청크가 오면 "..." 로딩 메시지를 지우고 텍스트 시작
@@ -164,56 +157,8 @@ const AiVtuber: React.FC = () => {
           isFirstChunk = false;
         }
 
-        // [태그 감지 및 제거 로직 추가]
-        let cleanChunk = chunkText;
-        const tagRegex = /\[\[(.*?)\]\]/g;
-        let match;
-
-        while ((match = tagRegex.exec(chunkText)) !== null) {
-          // 태그 처리 로직 (Unity -> Live2D 매핑)
-          const rawTag = match[1];
-          console.log("Detected Tag:", rawTag);
-
-          // 1. Live2D Motion 직접 호출 (MAO_MOTIONS 키와 일치할 경우)
-          if (rawTag in MAO_MOTIONS) {
-            triggerMotion(rawTag as keyof typeof MAO_MOTIONS);
-          }
-          // 2. Unity 스타일 태그 매핑
-          else {
-            // (A) 표정 (Face)
-            if (rawTag.includes("Smile") || rawTag.includes("Happy")) {
-              live2dRef.current?.setExpression("exp_02"); // 웃음
-              triggerMotion("SPECIAL_HEART"); // 기쁨 모션
-            }
-            else if (rawTag.includes("Angry") || rawTag.includes("Sad")) {
-              live2dRef.current?.setExpression("exp_03"); // 눈감음(슬픔/난처 대체)
-              triggerMotion("TAP_BODY_3"); // 당황/거절 모션
-            }
-            else if (rawTag.includes("Default") || rawTag.includes("Normal")) {
-              live2dRef.current?.setExpression("exp_01"); // 기본 표정
-            }
-
-            // (B) 동작 (Do)
-            if (rawTag.includes("Jump")) {
-              triggerMotion("SPECIAL_RABBIT_MAGIC"); // 점프 -> 마술
-            }
-            else if (rawTag.includes("Win") || rawTag.includes("Love")) {
-              triggerMotion("SPECIAL_HEART"); // 승리/사랑 -> 하트
-            }
-            else if (rawTag.includes("Damage") || rawTag.includes("Shock")) {
-              triggerMotion("TAP_BODY_3"); // 데미지 -> 터치3(놀람)
-            }
-            else if (rawTag.includes("Hello") || rawTag.includes("Greetings")) {
-              triggerMotion("TAP_BODY_1"); // 인사 -> 터치1
-            }
-          }
-
-          // 텍스트에서 태그 제거
-          cleanChunk = cleanChunk.replace(match[0], "");
-        }
-
-        fullResponseText += cleanChunk;
-        currentSentence += cleanChunk;
+        fullResponseText += chunkText;
+        currentSentence += chunkText;
 
         // 3. 스트리밍 중인 텍스트로 UI 업데이트
         setChatHistory((prev) => {
@@ -229,7 +174,7 @@ const AiVtuber: React.FC = () => {
         });
 
         // 4. TTS 문장 단위 끊기 로직 (기존 유지)
-        if (/[.!?\n]/.test(cleanChunk)) {
+        if (/[.!?\n]/.test(chunkText)) {
           speak(currentSentence);
           currentSentence = "";
         }
@@ -364,105 +309,35 @@ const AiVtuber: React.FC = () => {
         }}
       >
         {/* 1. 모션 버튼 영역 */}
-        {/* 1. 모션/표정 버튼 영역 */}
         <div
           style={{
             padding: "10px",
             borderBottom: "1px solid #ddd",
-            backgroundColor: "rgba(255,255,255,0.5)",
             display: "flex",
-            flexDirection: "column",
-            gap: "10px",
+            flexDirection: "row",
+            justifyContent: "space-between",
+            gap: "5px",
+            backgroundColor: "rgba(255,255,255,0.5)",
           }}
         >
-          {/* Body Motions */}
-          <div style={{ fontSize: "12px", fontWeight: "bold", color: "#555" }}>
-            Body Motions (모션)
-          </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr 1fr",
-              gap: "5px",
-            }}
+          <button
+            onClick={() => triggerMotion("SPECIAL_HEART")}
+            style={{ ...btnStyle, flex: 1 }}
           >
-            <button
-              onClick={() => triggerMotion("SPECIAL_HEART")}
-              style={btnStyle}
-              title="special_01: 하트/폭발"
-            >
-              ❤️ 하트
-            </button>
-            <button
-              onClick={() => triggerMotion("SPECIAL_RABBIT_MAGIC")}
-              style={btnStyle}
-              title="special_03: 토끼 마술"
-            >
-              🐰 마술
-            </button>
-            <button
-              onClick={() => triggerMotion("SPECIAL_RABBIT_AURA")}
-              style={btnStyle}
-              title="special_02: 토끼 오라"
-            >
-              ✨ 오라
-            </button>
-            <button
-              onClick={() => triggerMotion("TAP_BODY_1")}
-              style={btnStyle}
-              title="mtn_02: 터치 1"
-            >
-              👆 터치1
-            </button>
-            <button
-              onClick={() => triggerMotion("TAP_BODY_2")}
-              style={btnStyle}
-              title="mtn_03: 터치 2"
-            >
-              ✌️ 터치2
-            </button>
-            <button
-              onClick={() => triggerMotion("TAP_BODY_3")}
-              style={btnStyle}
-              title="mtn_04: 터치 3"
-            >
-              👋 터치3
-            </button>
-          </div>
-
-          {/* Expressions */}
-          <div style={{ fontSize: "12px", fontWeight: "bold", color: "#555" }}>
-            Expressions (표정)
-          </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr 1fr",
-              gap: "5px",
-            }}
+            ❤️ 하트
+          </button>
+          <button
+            onClick={() => triggerMotion("SPECIAL_RABBIT_MAGIC")}
+            style={{ ...btnStyle, flex: 1 }}
           >
-            <button
-              onClick={() => live2dRef.current?.setExpression("exp_01")}
-              style={btnStyle}
-              title="Normal: 눈 뜸"
-            >
-              😐 기본
-            </button>
-            <button
-              onClick={() => live2dRef.current?.setExpression("exp_02")}
-              style={btnStyle}
-              title="Smile: 웃음"
-            >
-              😄 웃음
-            </button>
-            <button
-              onClick={() => live2dRef.current?.setExpression("exp_03")}
-              style={btnStyle}
-              title="Closed Eyes: 눈 감음"
-            >
-              😌 눈감음
-            </button>
-          </div>
+            🐰 마술
+          </button>
+          <button
+            onClick={() => triggerMotion("TAP_BODY_3")}
+            style={{ ...btnStyle, flex: 1 }}
+          >
+            👋 인사
+          </button>
         </div>
 
         {/* 2. 채팅 내역 영역 */}

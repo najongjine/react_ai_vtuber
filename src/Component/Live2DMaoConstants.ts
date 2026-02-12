@@ -12,5 +12,6 @@ export const MAO_MOTIONS = {
 // 외부에서 사용할 제어 함수 타입 정의
 export interface Live2DController {
   playMotion: (motionKey: keyof typeof MAO_MOTIONS) => void;
+  setExpression: (expressionId: string) => void;
   stopSpeaking: () => void;
 }

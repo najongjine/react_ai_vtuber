@@ -4,13 +4,10 @@ import {
   Live2DModel,
   MotionPreloadStrategy,
 } from "pixi-live2d-display/cubism4";
-import { MAO_MOTIONS } from "./Live2DMaoConstants";
+import { MAO_MOTIONS, Live2DController } from "./Live2DMaoConstants";
 
-export interface Live2DController {
-  playMotion: (motionKey: keyof typeof MAO_MOTIONS) => void;
-  setExpression: (expressionId: string) => void;
-  stopSpeaking: () => void;
-}
+(window as any).PIXI = PIXI;
+Live2DModel.registerTicker(PIXI.Ticker);
 
 interface Live2DViewerProps {
   isSpeaking: boolean;
@@ -27,7 +24,8 @@ const Live2DViewer = forwardRef<Live2DController, Live2DViewerProps>(
     const modelRef = useRef<Live2DModel | null>(null);
     const mouthOpenParamIndexRef = useRef<number>(-1);
 
-
+    // [추가] 원래의 MotionManager update 함수를 백업할 Ref
+    const originalUpdateRef = useRef<any>(null);
 
     useImperativeHandle(ref, () => ({
       playMotion: (motionKey) => {
@@ -35,25 +33,6 @@ const Live2DViewer = forwardRef<Live2DController, Live2DViewerProps>(
         const motion = MAO_MOTIONS[motionKey];
         console.log(`Playing Motion: ${motionKey}`);
         modelRef.current.motion(motion.group, motion.index, 3);
-      },
-      setExpression: (expressionId: string) => {
-        if (!modelRef.current) return;
-        const internalModel = modelRef.current.internalModel as any;
-        // expressionManager가 있는지 확인 후 실행
-        if (internalModel.motionManager && internalModel.motionManager.expressionManager) {
-          console.log(`Setting Expression: ${expressionId}`);
-          // internalModel.motionManager.expressionManager.setExpression(expressionId);
-          // pixi-live2d-display의 버전에 따라 다를 수 있음. 보통은 motionManager.expressionManager.setExpression
-          // 또는 internalModel.expressionManager 일 수도 있음.
-          // 안전하게 try-catch
-          try {
-            internalModel.motionManager.expressionManager.setExpression(expressionId);
-          } catch (e) {
-            console.error("Expression Error:", e);
-          }
-        } else {
-          console.warn("ExpressionManager not found");
-        }
       },
       stopSpeaking: () => {
         if (modelRef.current && mouthOpenParamIndexRef.current !== -1) {
@@ -112,7 +91,35 @@ const Live2DViewer = forwardRef<Live2DController, Live2DViewerProps>(
       };
     }, [modelUrl]);
 
+    // [핵심 로직 추가] isSpeaking 상태에 따라 MotionManager 잠금/해제
+    useEffect(() => {
+      if (!modelRef.current) return;
 
+      const internalModel = modelRef.current.internalModel as any;
+      const motionManager = internalModel.motionManager;
+
+      if (!motionManager) return;
+
+      if (isSpeaking) {
+        // 1. 말하는 중일 때: 모션 매니저 무력화 (자동 모션 방지)
+
+        // 아직 백업된 함수가 없다면 현재 함수를 백업
+        if (!originalUpdateRef.current) {
+          originalUpdateRef.current = motionManager.update;
+        }
+
+        // 업데이트 함수를 빈 함수로 교체하여 동작을 멈춤
+        motionManager.update = () => {};
+      } else {
+        // 2. 말하기가 끝났을 때: 모션 매니저 복구
+
+        // 백업된 함수가 있다면 원상복구
+        if (originalUpdateRef.current) {
+          motionManager.update = originalUpdateRef.current;
+          originalUpdateRef.current = null; // 초기화
+        }
+      }
+    }, [isSpeaking]); // isSpeaking이 변경될 때마다 실행
 
     // 립싱크 및 애니메이션 제어 (Ticker) - 기존 코드 유지
     useEffect(() => {
