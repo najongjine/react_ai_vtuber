@@ -26,7 +26,6 @@ const Live2DViewer = forwardRef<Live2DController, Live2DViewerProps>(
     const appRef = useRef<PIXI.Application | null>(null);
     const modelRef = useRef<Live2DModel | null>(null);
     const mouthOpenParamIndexRef = useRef<number>(-1);
-    const expressionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 
 
@@ -39,31 +38,16 @@ const Live2DViewer = forwardRef<Live2DController, Live2DViewerProps>(
       },
       setExpression: (expressionId: string) => {
         if (!modelRef.current) return;
-
-        // [New] 기존 타이머 제거 (새로운 표정이 오면 타이머 리셋)
-        if (expressionTimeoutRef.current) {
-          clearTimeout(expressionTimeoutRef.current);
-          expressionTimeoutRef.current = null;
-        }
-
         const internalModel = modelRef.current.internalModel as any;
         // expressionManager가 있는지 확인 후 실행
         if (internalModel.motionManager && internalModel.motionManager.expressionManager) {
           console.log(`Setting Expression: ${expressionId}`);
+          // internalModel.motionManager.expressionManager.setExpression(expressionId);
+          // pixi-live2d-display의 버전에 따라 다를 수 있음. 보통은 motionManager.expressionManager.setExpression
+          // 또는 internalModel.expressionManager 일 수도 있음.
+          // 안전하게 try-catch
           try {
             internalModel.motionManager.expressionManager.setExpression(expressionId);
-
-            // [New] 기본 표정(exp_01)이 아니라면 5초 뒤 복귀
-            if (expressionId !== "exp_01") {
-              expressionTimeoutRef.current = setTimeout(() => {
-                const currentModel = modelRef.current; // capture ref
-                if (currentModel?.internalModel?.motionManager?.expressionManager) {
-                  console.log("Auto Reverting to Default Expression (exp_01)");
-                  (currentModel.internalModel as any).motionManager.expressionManager.setExpression("exp_01");
-                }
-                expressionTimeoutRef.current = null;
-              }, 5000);
-            }
           } catch (e) {
             console.error("Expression Error:", e);
           }
@@ -144,30 +128,6 @@ const Live2DViewer = forwardRef<Live2DController, Live2DViewerProps>(
         appRef.current = null;
       };
     }, [modelUrl]);
-
-    // [Fix] 마우스 추적 (Look at Pointer) 복구
-    useEffect(() => {
-      const handlePointerMove = (event: PointerEvent) => {
-        if (!modelRef.current) return;
-
-        // [수정] 모델의 얼굴 위치를 기준으로 포커스 좌표 계산
-        const bounds = modelRef.current.getBounds();
-        const centerX = bounds.x + bounds.width / 2;
-        // 얼굴은 보통 모델의 상단 1/5 지점 정도에 위치한다고 가정 (0.5는 허리/중심)
-        const centerY = bounds.y + bounds.height * 0.2;
-
-        const x = event.clientX - centerX;
-        const y = event.clientY - centerY;
-
-        modelRef.current.focus(x, y);
-      };
-
-      window.addEventListener("pointermove", handlePointerMove);
-
-      return () => {
-        window.removeEventListener("pointermove", handlePointerMove);
-      };
-    }, []);
 
 
 
