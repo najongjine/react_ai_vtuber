@@ -8,7 +8,7 @@ const ChartPanel: React.FC = () => {
         left: "15vw",
         right: "150px",
         top: "100px",
-        bottom: "160px",
+        bottom: "250px",
         backgroundColor: "rgba(255, 255, 255, 0.7)",
         backdropFilter: "blur(5px)",
         borderRadius: "20px",
